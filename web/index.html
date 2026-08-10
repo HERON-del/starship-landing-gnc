@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Starship Landing GNC — Trajectory Viewer</title>
+<link rel="stylesheet" href="/style.css" />
+<script type="importmap">
+{
+  "imports": {
+    "three": "/vendor/three.module.js",
+    "three/addons/controls/OrbitControls.js": "/vendor/OrbitControls.js"
+  }
+}
+</script>
+</head>
+<body>
+
+<div id="viewport"></div>
+
+<!-- ── top bar ─────────────────────────────────────────────── -->
+<header class="hud hud-top">
+  <div class="brand">
+    <span class="brand-mark"></span>
+    <div>
+      <div class="brand-title">STARSHIP LANDING GNC</div>
+      <div class="brand-sub" id="problem-phase">—</div>
+    </div>
+  </div>
+
+  <div class="stat-row" id="stat-row">
+    <div class="stat"><span class="stat-label">ALTITUDE</span><span class="stat-value" id="stat-alt">—</span></div>
+    <div class="stat"><span class="stat-label">SPEED</span><span class="stat-value" id="stat-speed">—</span></div>
+    <div class="stat"><span class="stat-label">THRUST</span><span class="stat-value" id="stat-thrust">—</span></div>
+    <div class="stat"><span class="stat-label">TILT</span><span class="stat-value" id="stat-tilt">—</span></div>
+    <div class="stat"><span class="stat-label">T</span><span class="stat-value" id="stat-time">—</span></div>
+  </div>
+
+  <div class="status-chip" id="status-chip"><span class="dot"></span><span id="status-text">IDLE</span></div>
+</header>
+
+<!-- ── left drawer: parameters ─────────────────────────────── -->
+<aside class="hud panel panel-left" id="panel-left">
+  <div class="panel-head">
+    <span>MISSION CONFIG</span>
+    <button class="icon-btn" id="collapse-left" title="Collapse">‹</button>
+  </div>
+
+  <div class="panel-body">
+    <label class="field">
+      <span class="field-label">PROBLEM</span>
+      <select id="problem-select"></select>
+    </label>
+    <p class="problem-summary" id="problem-summary"></p>
+
+    <div id="param-groups"></div>
+  </div>
+
+  <div class="panel-foot">
+    <button class="btn btn-primary" id="btn-solve">SOLVE ▸</button>
+    <button class="btn" id="btn-reset" title="Restore defaults">RESET</button>
+    <button class="btn" id="btn-export" title="Download trajectory JSON">EXPORT</button>
+    <label class="auto-solve">
+      <input type="checkbox" id="auto-solve" checked />
+      <span>Auto-solve on change</span>
+    </label>
+  </div>
+</aside>
+
+<!-- ── right drawer: results ───────────────────────────────── -->
+<aside class="hud panel panel-right" id="panel-right">
+  <div class="panel-head">
+    <span>FLIGHT DATA</span>
+    <button class="icon-btn" id="collapse-right" title="Collapse">›</button>
+  </div>
+  <div class="panel-body">
+    <div class="kv-grid" id="kv-grid"></div>
+    <div class="notes" id="notes"></div>
+    <div class="charts" id="charts"></div>
+  </div>
+</aside>
+
+<!-- ── bottom bar: playback + view ─────────────────────────── -->
+<footer class="hud hud-bottom">
+  <button class="icon-btn play" id="btn-play" title="Play / pause">▶</button>
+  <input type="range" id="scrub" min="0" max="1" step="0.001" value="0" />
+  <span class="time-readout" id="time-readout">0.00 s</span>
+
+  <div class="seg" id="speed-seg">
+    <button data-speed="0.25">¼×</button>
+    <button data-speed="0.5">½×</button>
+    <button data-speed="1" class="active">1×</button>
+    <button data-speed="2">2×</button>
+  </div>
+
+  <div class="seg" id="cam-seg">
+    <button data-cam="orbit" class="active">ORBIT</button>
+    <button data-cam="chase">CHASE</button>
+    <button data-cam="side">SIDE</button>
+    <button data-cam="top">TOP</button>
+  </div>
+
+  <div class="seg" id="toggle-seg">
+    <button data-toggle="grid" class="active">GRID</button>
+    <button data-toggle="cone" class="active">CORRIDOR</button>
+    <button data-toggle="trail" class="active">PATH</button>
+    <button data-toggle="vectors">VECTORS</button>
+  </div>
+</footer>
+
+<div id="toast" class="toast"></div>
+
+<script type="module" src="/js/main.js"></script>
+</body>
+</html>
