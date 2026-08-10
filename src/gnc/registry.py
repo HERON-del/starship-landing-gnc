@@ -36,6 +36,10 @@ class Problem(ABC):
     phase: str = ""
     #: rough scale of the scene in metres, used to frame the camera
     scene_scale: float = 100.0
+    #: True for optimisers, which constrain the vehicle to arrive at the pad at
+    #: rest. Open-loop simulations make no such promise -- they are allowed to
+    #: crash, and the verification suite must not assert a soft landing on them.
+    enforces_terminal_state: bool = True
 
     @abstractmethod
     def params(self) -> list[Param]:

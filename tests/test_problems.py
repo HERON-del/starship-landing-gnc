@@ -7,7 +7,9 @@ Run:  python tests/test_problems.py
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_ROOT / "src"))
+sys.path.insert(0, str(_ROOT))
 
 import numpy as np  # noqa: E402
 
@@ -48,10 +50,21 @@ for prob in registry.all_problems():
         ("attitude shape", att.shape == (n_state, 4)),
         ("control length", thr.shape == (len(traj.t_control), 3)),
         ("quaternions normalised", np.allclose(np.linalg.norm(att, axis=1), 1.0, atol=1e-6)),
-        ("lands at pad", float(np.linalg.norm(pos[-1])) < 1e-3),
-        ("lands at rest", float(np.linalg.norm(vel[-1])) < 1e-3),
         ("no NaNs", np.isfinite(pos).all() and np.isfinite(thr).all()),
     ]
+
+    # Only optimisers promise to arrive at the pad at rest. An open-loop
+    # simulation is allowed to fly the vehicle into the ground.
+    if prob.enforces_terminal_state:
+        checks += [
+            ("lands at pad", float(np.linalg.norm(pos[-1])) < 1e-3),
+            ("lands at rest", float(np.linalg.norm(vel[-1])) < 1e-3),
+        ]
+    else:
+        checks += [
+            ("reaches the ground or times out", float(pos[-1][1]) >= -1e-6),
+            ("monotonic time", bool(np.all(np.diff(traj.t_state) > 0))),
+        ]
     for name, passed in checks:
         print(f"    [{'OK' if passed else 'FAIL'}] {name}")
         ok &= passed

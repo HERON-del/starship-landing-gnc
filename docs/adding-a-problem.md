@@ -69,6 +69,14 @@ A translation-only problem can call `attitudes_from_thrust(thrust)` to point the
 vehicle along its thrust vector. A real 6-DoF solver returns its own attitude and
 skips that helper.
 
+### Optimisers vs simulations
+
+Set `enforces_terminal_state = False` on any problem that propagates forward
+rather than solving for a terminal condition. Optimisers constrain the vehicle to
+arrive at the pad at rest, and `tests/test_problems.py` asserts exactly that. An
+open-loop simulation makes no such promise — it is allowed to fly the vehicle into
+the ground, and the suite checks time monotonicity and ground contact instead.
+
 ### Reporting failure
 
 Never raise out of `solve()`. Return a `Trajectory` with `feasible=False`, the

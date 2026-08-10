@@ -70,7 +70,13 @@ async function run() {
     return;
   }
 
-  setStatus('OPTIMAL', 'ok');
+  // Optimisers report "optimal"; the simulation reports what actually happened,
+  // and "crash" is a successful solve with a bad outcome.
+  const label = String(traj.status).toUpperCase();
+  const severity = /CRASH|DIVERG|ERROR/.test(label) ? 'bad'
+    : /HARD|AIRBORNE|INACCURATE/.test(label) ? 'warn'
+      : 'ok';
+  setStatus(label, severity);
   const T = traj.t_state.at(-1) ?? 1;
   $('scrub').max = T;
   $('scrub').step = T / 600;
@@ -118,6 +124,16 @@ function renderResults(traj) {
   }
 }
 
+// Thrust is m/s^2 for the optimiser problems and newtons for the simulation,
+// so the top-bar readout has to cope with both 12.4 and 6,900,000.
+function compact(v) {
+  const a = Math.abs(v);
+  if (a >= 1e9) return `${(v / 1e9).toFixed(2)}G`;
+  if (a >= 1e6) return `${(v / 1e6).toFixed(2)}M`;
+  if (a >= 1e4) return `${(v / 1e3).toFixed(1)}k`;
+  return v.toFixed(1);
+}
+
 function formatNum(v) {
   if (Math.abs(v) >= 1000 || (Math.abs(v) < 0.01 && v !== 0)) return v.toExponential(3);
   return v.toFixed(3);
@@ -145,7 +161,7 @@ function tick(now) {
   if (s) {
     $('stat-alt').textContent = `${s.altitude.toFixed(1)} m`;
     $('stat-speed').textContent = `${s.speed.toFixed(1)} m/s`;
-    $('stat-thrust').textContent = `${s.thrust.toFixed(1)}`;
+    $('stat-thrust').textContent = compact(s.thrust);
     $('stat-tilt').textContent = `${s.tilt.toFixed(1)}°`;
     $('stat-time').textContent = `${s.time.toFixed(2)} s`;
     charts.update(s.time);

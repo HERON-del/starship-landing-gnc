@@ -97,6 +97,7 @@ html, body {
 }
 .status-chip.ok    .dot { background: var(--good); }
 .status-chip.bad   .dot { background: var(--bad); }
+.status-chip.warn  .dot { background: var(--accent-warm); }
 .status-chip.busy  .dot { background: var(--accent-warm); animation: pulse 0.8s infinite; }
 @keyframes pulse { 50% { opacity: 0.25; } }
 

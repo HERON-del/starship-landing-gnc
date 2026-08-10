@@ -98,9 +98,30 @@ Measured order is now 4.00, 4.00, 4.00, 4.01, 3.96 across the sweep.
 - At `dt = 1 s` on the nonlinear case, RK4 is 2.6e7× more accurate than Euler for 4×
   the work per step.
 
+### Viewer integration
+Added `descent-sim` to the 3-D viewer so the Day 2 model is explorable directly.
+Building it surfaced a real result: **an open-loop suicide burn essentially cannot
+land.** With constant thrust at TWR ~6 the engine keeps burning after the descent
+is arrested, so the vehicle stops above the pad and climbs away; ignite a metre
+lower and it crashes. The trigger is only evaluated once per step, so at −200 m/s
+with `dt = 0.05 s` the ignition altitude quantises to a 10 m grid and touchdown
+speed swings from 17 m/s to 73 m/s across one step.
+
+Added a closed-loop law for contrast — thrust tracking `a = v²/2z + g`, the
+constant deceleration that nulls velocity exactly at the pad, with ignition
+emerging from the minimum-throttle bound rather than being scheduled. It lands at
+**0.32 m/s** on the same initial conditions where the open-loop burn crashes at
+224 m/s. That gap is the argument for computed guidance, and the motivation for
+Weeks 2 and 5.
+
 ### Problems hit
 - Test 4 failed at order 1.65 — root-caused to the reference solution, not the
   integrator (see above)
+- The viewer's verification suite asserted every problem lands at rest, which is
+  only true of optimisers. Added an `enforces_terminal_state` flag so simulations
+  are checked for ground contact and time monotonicity instead.
+- The viewer hardcoded "OPTIMAL" on any successful solve, which labelled a crash
+  as optimal. It now reports the real status with a severity colour.
 - Guide's ANSI `[PASS]` markers render as escape gibberish on Windows consoles;
   added VT-mode detection with a plain-text fallback
 - Guide's test writes figures relative to the current directory; switched to paths

@@ -32,6 +32,14 @@ glance. The translucent cone is the glideslope corridor.
 | **Export** | full run as JSON — parameters plus trajectory |
 | **Re-solve** | `r`, or automatically on any control change |
 
+Three problems are registered: the Day 1 1-D optimiser, the Day 2 open-loop
+simulation, and the Week 1 3-DoF optimiser. The Day 2 entry propagates the
+verified variable-mass model rather than optimising, so the four Day 2
+exploration experiments are sliders rather than notebook edits — pick a guidance
+law, an integrator and a step size and watch what the physics actually does.
+It is also the only problem that can fail *physically*: it will happily fly the
+vehicle into the ground at 220 m/s and report the crash.
+
 ---
 
 ## Motivation
@@ -53,7 +61,7 @@ published results in the trajectory-optimization literature.
 
 | Phase | Scope | Status |
 |-------|-------|--------|
-| Day 2 | Variable-mass dynamics + verified RK4 integrator | done |
+| Day 2 | Variable-mass dynamics + verified RK4 integrator, live in the viewer | done |
 | Week 1 | 3-DoF convex powered descent, glideslope + tilt cones | done |
 | Week 2 | Sequential Convex Programming (SCvx) solver | next |
 | Week 3 | 6-DoF rigid-body dynamics with quaternions | |

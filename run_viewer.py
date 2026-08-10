@@ -12,8 +12,12 @@ import webbrowser
 from pathlib import Path
 from threading import Timer
 
-SRC = Path(__file__).resolve().parent / "src"
+ROOT = Path(__file__).resolve().parent
+SRC = ROOT / "src"
+# `src` so `gnc.*` resolves; the repo root so `src.dynamics` / `src.integrators`
+# resolve the same way they do from the test suite.
 sys.path.insert(0, str(SRC))
+sys.path.insert(0, str(ROOT))
 
 import uvicorn  # noqa: E402
 
