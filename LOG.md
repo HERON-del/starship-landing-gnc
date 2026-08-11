@@ -134,3 +134,102 @@ Weeks 2 and 5.
 
 ### Time spent
 _X hours_
+
+---
+
+## Day 3 — 2026-08-10
+
+### Done
+- Built `src/constraints.py`: glideslope, thrust magnitude (lossless
+  convexification), pointing, mass dynamics, log-mass bounds (for Week 2)
+- Built `src/landing_problem.py`: constrained 2-D minimum-fuel landing with
+  damped mass-reference iteration, converging in 8 iterations
+- Built `tests/test_landing.py`: 4 test groups, all passing
+- Generated `results/day3_landing.png` — first real constrained trajectory
+- Ran all four exploration experiments in
+  `notebooks/03_constraints_exploration.ipynb`
+
+### Paper takeaway
+> _To write in my own words after the Part 1 read. Cover: (1) what problem
+> Açıkmeşe & Ploen 2007 solves, (2) what lossless convexification means,
+> (3) why ‖T‖ ≥ T_min is the hard part, (4) one thing I did not understand._
+
+### Four things the plan got wrong, and what they taught me
+
+**1. The glideslope formula is inverted.** The plan writes
+`|x| <= z * tan(gamma)` with gamma measured from horizontal, and says 80° means
+"within 10° of vertical". Those disagree: at 80° that formula permits 5.7 m
+downrange per metre of altitude — nearly horizontal flight. The correct
+constraint is `|x| <= z / tan(gamma)`, which is what the Week 1 3-DoF problem
+already used. With the sign fixed, the plan's default entry point (800 m
+downrange at 1500 m altitude) sits *outside* its own 80° cone.
+
+**2. The default entry state is unreachable.** Minimum throttle is 40% of three
+Raptors, so TWR at minimum throttle is 2.16. Once lit, vertical acceleration is
+at least +8.6 m/s² — the vehicle can only decelerate. Nulling `vz` over a fixed
+20 s burn therefore demands `|vz0| >= 198 m/s`, and the altitude has to match the
+resulting drop. The plan's `z0=1500, vz0=-80` fails both. Wrote
+`min_arrestable_speed()` to derive the entry state from the burn rather than
+guessing it.
+
+**3. Lossless convexification is not automatically lossless.** This is the one
+worth remembering. The relaxation only bounds `‖T‖ <= sigma`. When the entry is
+gentle, the optimiser parks `sigma` on `T_min` and lets `‖T‖` drift *below* it —
+producing a trajectory that burns minimum-throttle propellant while generating
+less than minimum-throttle force. Not flyable, and the plan's own test suite
+cannot see it, because checking `‖T‖ <= sigma` passes trivially. Measured gap,
+as a fraction of T_min:
+
+| entry margin | max(sigma − ‖T‖) | min ‖T‖ |
+|---|---|---|
+| 1.05 | 12.55 % | 0.874 T_min |
+| 1.15 | 8.60 % | 0.914 T_min |
+| 1.30 | 3.14 % | 0.969 T_min |
+| 1.42 | **0.00 %** | **1.00 T_min** |
+
+The relaxation is tight only when the minimum-thrust bound is *not* binding
+across the whole arc. Added `test_relaxation_is_tight` so a regression is
+visible.
+
+**4. The problem needs non-dimensionalising.** In SI, thrust is ~3e6 N while the
+velocity-update coefficient `dt/m` is ~3e-6 — twelve orders of magnitude in one
+constraint matrix. Clarabel did not merely mis-solve it, it raised `SolverError`
+on some instances, which reads exactly like physical infeasibility. Sweeping the
+glideslope gave 80° infeasible but 84° and 86° fine; sweeping the pointing limit
+gave 30° infeasible but 45° fine. Scattered nonsense. After scaling every
+quantity by a characteristic value (L, V, M, F), all coefficients are order 1 and
+the sweeps came out smooth and monotone.
+
+### Key insights
+- The glideslope costs **nothing** in fuel between 50° and 86° and then goes
+  infeasible at 88°. It is a feasibility constraint, not a fuel constraint —
+  no warning in the cost function, then a hard wall. Same shape for the pointing
+  limit: free above 20°, infeasible at 5°.
+- Fuel vs initial downrange is **not linear and not monotone**. It is a shallow U
+  with a minimum near x0 = 400 m, about 170 kg cheaper than starting directly
+  over the pad, because the fixed −40 m/s drift carries the vehicle to the target
+  instead of past it.
+- There is **no optimal burn duration**. Fuel rises nearly linearly with burn
+  time, and the ceiling is arithmetic: minimum throttle flows 861 kg/s, so
+  30,000 kg buys 34.9 s of burn. Ask for 34 s and it runs dry.
+- The mass-reference iteration oscillated until damped. Cause: `sum(sigma)` is
+  linear, so distinct bang-bang switching structures tie on total fuel while
+  giving mass histories that differ by ~700 kg. Converge on the objective, not
+  the profile. This is the same degeneracy Day 1 had, and the damping is a crude
+  trust region — which is precisely what SCvx formalises.
+- Infeasibility is a correct answer. The 5 km / 500 m case fails on **geometry
+  alone**: that corridor allows |x| <= 88 m. Run the cheap geometric check before
+  invoking the solver.
+
+### Problems hit
+- All four items above; each was diagnosed rather than worked around
+- Clarabel `SolverError` misread as infeasibility until solvers and node counts
+  were cross-checked against each other
+
+### Tomorrow (Day 4)
+- Free final time: let the optimizer choose when to start the burn
+- Compare fixed-time vs free-time fuel cost
+- First look at the full SCvx loop structure
+
+### Time spent
+_X hours_

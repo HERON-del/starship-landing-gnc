@@ -62,6 +62,7 @@ published results in the trajectory-optimization literature.
 | Phase | Scope | Status |
 |-------|-------|--------|
 | Day 2 | Variable-mass dynamics + verified RK4 integrator, live in the viewer | done |
+| Day 3 | Constrained landing: glideslope, thrust bounds, pointing limit | done |
 | Week 1 | 3-DoF convex powered descent, glideslope + tilt cones | done |
 | Week 2 | Sequential Convex Programming (SCvx) solver | next |
 | Week 3 | 6-DoF rigid-body dynamics with quaternions | |
@@ -88,6 +89,35 @@ Falcon 9.
 Every constraint stays convex — the thrust-magnitude bound, the gimbal cone, and
 the glideslope are all second-order cones — so the solve is fast and the optimum
 is global.
+
+### Constrained landing optimization (Day 3)
+
+Minimum-fuel powered descent with realistic engineering constraints: glideslope
+cone, thrust magnitude bounds via lossless convexification, thrust pointing
+limit, and variable mass.
+
+![Landing trajectory](results/day3_landing.png)
+
+The vehicle enters at 2,910 m altitude and 385 m downrange doing 285 m/s, and
+lands on the pad at rest using 18,073 kg of propellant (60% of the landing load).
+The trajectory stays inside the glideslope cone, thrust respects [T_min, T_max],
+and the pointing angle never exceeds 30°. The mass-reference iteration converges
+in 8 damped steps.
+
+**The relaxation is verified, not assumed.** Lossless convexification replaces
+the non-convex `‖T‖ >= T_min` with `‖T‖ <= sigma` plus a box on sigma, and is
+only lossless when the optimal solution drives `‖T‖ = sigma`. That does not hold
+automatically: on a gentle entry the optimiser parks sigma on T_min and lets
+`‖T‖` fall to 0.87 T_min, producing a trajectory that burns minimum-throttle
+propellant while generating less than minimum-throttle force. Checking
+`‖T‖ <= sigma` passes trivially and hides it, so the suite asserts the two are
+*equal* — max gap 0 N on the nominal problem.
+
+**The problem is solved non-dimensionally.** In SI, thrust (~3×10⁶ N) and the
+velocity-update coefficient `dt/m` (~3×10⁻⁶) span twelve orders of magnitude, and
+Clarabel raises `SolverError` on some instances — indistinguishable from
+infeasibility unless you cross-check solvers. Scaling every quantity by a
+characteristic value makes the constraint sweeps smooth and monotone.
 
 ### Verified dynamics and integration (Day 2)
 
@@ -163,6 +193,8 @@ and ships with CVXPY.
 src/
   dynamics.py          3-DoF variable-mass rocket model + closed-form solutions
   integrators.py       Euler and RK4 steppers, fixed-step propagator
+  constraints.py       glideslope, thrust bounds, pointing, mass dynamics
+  landing_problem.py   constrained minimum-fuel landing (direct transcription)
   gnc/
     types.py           Param + Trajectory contracts shared by solver and viewer
     registry.py        problem plugin registry
