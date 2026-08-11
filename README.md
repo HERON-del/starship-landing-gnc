@@ -32,13 +32,24 @@ glance. The translucent cone is the glideslope corridor.
 | **Export** | full run as JSON — parameters plus trajectory |
 | **Re-solve** | `r`, or automatically on any control change |
 
-Three problems are registered: the Day 1 1-D optimiser, the Day 2 open-loop
-simulation, and the Week 1 3-DoF optimiser. The Day 2 entry propagates the
-verified variable-mass model rather than optimising, so the four Day 2
-exploration experiments are sliders rather than notebook edits — pick a guidance
-law, an integrator and a step size and watch what the physics actually does.
-It is also the only problem that can fail *physically*: it will happily fly the
-vehicle into the ground at 220 m/s and report the crash.
+Five problems are registered — one per day of work, plus the Week 1 3-DoF
+optimiser:
+
+| Problem | What it demonstrates |
+|---|---|
+| Day 1 — 1-D soft landing | the degenerate minimum-fuel objective |
+| Day 2 — powered descent simulation | open-loop vs closed-loop guidance; it can crash |
+| Day 3 — constrained landing | glideslope, throttle and gimbal limits as live sliders |
+| Day 4 — free final time | the duration is searched, and losslessness is enforced |
+| Week 1 — 3-DoF powered descent | full 3-D translation with cone constraints |
+
+The Day 2 entry propagates the verified variable-mass model rather than
+optimising, so its four exploration experiments are sliders rather than notebook
+edits. It is also the only problem that can fail *physically*: it will happily
+fly the vehicle into the ground at 220 m/s and report the crash. The Day 4 entry
+reports the flyable duration window and how many candidate durations it rejected
+for a slack relaxation — switch that check off and watch the status chip turn
+from a result into a warning.
 
 ---
 
@@ -62,6 +73,8 @@ published results in the trajectory-optimization literature.
 | Phase | Scope | Status |
 |-------|-------|--------|
 | Day 2 | Variable-mass dynamics + verified RK4 integrator, live in the viewer | done |
+| Day 3 | Constrained landing: glideslope, throttle bounds, gimbal limit | done |
+| Day 4 | Free final time + trapezoidal collocation | done |
 | Day 3 | Constrained landing: glideslope, thrust bounds, pointing limit | done |
 | Week 1 | 3-DoF convex powered descent, glideslope + tilt cones | done |
 | Week 2 | Sequential Convex Programming (SCvx) solver | next |
@@ -118,6 +131,47 @@ velocity-update coefficient `dt/m` (~3×10⁻⁶) span twelve orders of magnitud
 Clarabel raises `SolverError` on some instances — indistinguishable from
 infeasibility unless you cross-check solvers. Scaling every quantity by a
 characteristic value makes the constraint sweeps smooth and monotone.
+
+### Free final time (Day 4)
+
+![Fixed vs free time, Euler vs trapezoidal](results/day4_comparison.png)
+
+Burn duration chosen by the optimiser rather than assumed. With the entry state
+held fixed:
+
+| Configuration | Burn time | Fuel |
+|---|---|---|
+| Fixed 20 s | 20.00 s | 18,077 kg |
+| Free time, Euler | 16.02 s | 16,670 kg |
+| Free time, trapezoidal | 16.46 s | 16,797 kg |
+
+**7.1% of the landing propellant, recovered by choosing the duration.** Gravity
+losses are the whole story: every second the engine spends holding the vehicle
+up is propellant doing nothing for the trajectory.
+
+Time enters the dynamics multiplicatively, so it cannot be a variable in a
+convex program — `t_f · v` is a product of two unknowns. Declaring it as one
+anyway and holding `dt` at a reference value compiles, but silently decouples
+the duration from the trajectory, and the "optimum" is then just whichever bound
+the penalty term prefers. Instead the convex problem is solved at many fixed
+durations — coarse scan to bracket, golden-section to refine — so every point
+evaluated is a global optimum of its own subproblem. The problem compiles once
+with the duration-dependent coefficients as parameters, so the whole search runs
+in well under a second.
+
+**Lossless convexification has a boundary and the optimum sits on it.** The
+relaxation gap is exactly zero for durations in 16.5–20.5 s and jumps to 13% of
+`T_min` outside that window; every slack case has the pointing constraint at its
+limit, which the magnitude-only losslessness proof does not cover. Those
+trajectories burn propellant at the σ rate while commanding less force than
+that — cheaper on paper, unflyable in fact — so the search rejects them. Details
+in [docs/free-time-and-scvx.md](docs/free-time-and-scvx.md).
+
+**Euler vs trapezoidal, decided by measurement.** Comparing reported fuel proves
+nothing: each is optimal for its own discretized model, and Euler reports *less*
+fuel precisely because its model is wrong. Flying the commanded thrust through
+the verified RK4 integrator settles it — Euler misses the pad by 43.7 m,
+trapezoidal by 6.1 m, at the same node count.
 
 ### Verified dynamics and integration (Day 2)
 

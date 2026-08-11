@@ -127,10 +127,103 @@ Weeks 2 and 5.
 - Guide's test writes figures relative to the current directory; switched to paths
   resolved from the repo root so it works from any working directory
 
-### Tomorrow (Day 3)
+### Tomorrow-after (Day 3)
 - Re-derive the Day 1 landing problem using the new dynamics module
 - Add glideslope and thrust-cone constraints
 - Begin the log-mass change of variables from the paper
+
+### Time spent
+_X hours_
+
+---
+
+## Day 4 — 2026-08-11
+
+### Done
+- Built `src/discretization.py`: vectorised Euler and trapezoidal collocation
+- Built `src/landing_free_time.py`: burn duration chosen by search, not assumed
+- Built `tests/test_free_time.py`: 5 groups, all passing
+- Added `landing-free-time` to the 3-D viewer (five problems now registered)
+- Wrote `docs/free-time-and-scvx.md` covering the SCvx loop and troubleshooting
+
+### Headline result
+Holding the entry state fixed and letting the optimiser choose the duration:
+
+| Configuration | Burn time | Fuel |
+|---|---|---|
+| Fixed 20 s (Day 3) | 20.00 s | 18,077 kg |
+| Free time, Euler | 16.02 s | 16,670 kg |
+| Free time, trapezoidal | 16.46 s | 16,797 kg |
+
+**7.1% of the landing propellant recovered by choosing the duration rather than
+guessing it.** Gravity losses are the whole story: every extra second the engine
+spends holding the vehicle up is propellant that does nothing for the
+trajectory.
+
+### The guide's free-time formulation does not work
+It declares `t_f = cp.Variable()` but holds `dt` at a reference value inside
+every dynamics constraint. `t_f` then appears **only** in its own bounds and its
+own `0.001·t_f` penalty — completely decoupled from the trajectory. Minimising
+that penalty drives `t_f` to whichever bound the penalty prefers, and the
+reported "optimal burn time" is the lower bound in disguise. It would not change
+if the vehicle were twice as heavy.
+
+The failure is quiet, not loud: it compiles, runs, converges, and prints a
+plausible number.
+
+**What I did instead.** Time enters the dynamics multiplicatively, so it cannot
+be a convex variable. But for *fixed* `t_f` the problem is convex and solves in
+milliseconds, and fuel-versus-duration is smooth and bounded by infeasibility at
+both ends. So: coarse scan to bracket the feasible interval, then golden-section
+to the minimum. Every point evaluated is a global optimum of its own subproblem.
+The convex problem compiles once with the duration-dependent coefficients as
+`cp.Parameter`s, so 23 solves take under a second.
+
+### Lossless convexification has a boundary, and the optimum sits on it
+Sweeping duration, the relaxation gap is exactly zero for `t_f` in 16.5–20.5 s
+and jumps to 13% of T_min outside it. Every slack case has the pointing
+constraint at its limit — Açıkmeşe & Ploen's magnitude-only proof does not cover
+an active pointing constraint.
+
+Saturation turns out to be **necessary but not sufficient**, which I only caught
+by measuring: at N = 40 the search settles on 16.03 s with the tilt pegged at
+exactly 30.0° and a gap of 90 N — tight by any measure. So the code checks the
+gap on every solve instead of inferring it from the tilt.
+
+This is not academic. The *cheapest* duration lies in the slack region, and its
+trajectory burns propellant at the σ rate while commanding less force than that:
+cheap on paper, unflyable in fact. The search now rejects those and reports how
+many. In the viewer, switching the check off moves the answer from 16.03 s
+(gap 90 N) to 15.95 s (gap 328,328 N) at the same fuel to the kilogram.
+
+### Euler vs trapezoidal, settled by measurement not assertion
+Comparing reported fuel proves nothing — each is optimal for its own discretized
+model, and Euler routinely reports *less* fuel precisely because its model is
+wrong. So the test flies the commanded thrust through Day 2's verified RK4
+integrator:
+
+```
+Euler  position error  43.7 m  (1.50% of the descent)
+Trapz  position error   6.1 m  (0.21% of the descent)
+```
+
+**7.1× smaller miss at the same node count.** Euler's cheaper number was
+discretisation error being exploited.
+
+### Problems hit
+- Two of my own test assertions were wrong, not the code. I asserted
+  trapezoidal wins on terminal velocity as well as position — it does not, and
+  the ordering flips between runs, so asserting it was asserting noise. And I
+  required Euler to land within 1% of the descent, which contradicts the very
+  finding the test exists to demonstrate. Euler now gets a loose sanity bound
+  and the tight bound applies only to trapezoidal.
+- The guide predicts a U-shaped fuel-vs-duration curve. It is not a U here: it
+  rises monotonically across the whole feasible window, so the optimum sits
+  against the short-duration feasibility edge rather than in an interior basin.
+
+### Tomorrow (Day 5)
+- Trust regions — the missing third pillar of SCvx
+- Replace fixed damping on the mass reference with an adaptive step
 
 ### Time spent
 _X hours_
