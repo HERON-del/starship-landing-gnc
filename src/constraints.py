@@ -75,10 +75,17 @@ def thrust_magnitude_constraint(Tx_k, Tz_k, sigma_k, T_min, T_max):
 
     Parameters
     ----------
+    Accepts scalars (one time step) or equal-length vectors (the whole horizon
+    at once); the norm is taken down the component axis either way. Vectorising
+    matters more than it looks — building this constraint N times in a Python
+    loop dominates the solve time once CVXPY has to compile it.
+
+    Parameters
+    ----------
     Tx_k, Tz_k : cvxpy.Variable
-        Thrust components at time step k [N].
+        Thrust components at time step k, or over the horizon [N].
     sigma_k : cvxpy.Variable
-        Thrust magnitude slack variable at step k [N].
+        Thrust magnitude slack variable, same shape [N].
     T_min, T_max : float
         Minimum and maximum allowable thrust magnitude [N].
 
@@ -86,11 +93,11 @@ def thrust_magnitude_constraint(Tx_k, Tz_k, sigma_k, T_min, T_max):
     -------
     list of cvxpy constraints
     """
-    T_vec = cp.vstack([Tx_k, Tz_k])
+    T_vec = cp.vstack([Tx_k, Tz_k])          # (2,) -> (2,1);  (N,) -> (2,N)
     return [
-        cp.norm(T_vec) <= sigma_k,   # SOC: thrust inside the sigma ball
-        sigma_k >= T_min,            # minimum thrust (was non-convex!)
-        sigma_k <= T_max,            # maximum thrust
+        cp.norm(T_vec, axis=0) <= sigma_k,   # SOC: thrust inside the sigma ball
+        sigma_k >= T_min,                    # minimum thrust (was non-convex!)
+        sigma_k <= T_max,                    # maximum thrust
     ]
 
 

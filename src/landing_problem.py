@@ -294,26 +294,40 @@ def solve_landing(
         vx[N] == 0.0, vz[N] == 0.0,
     ]
 
-    for k in range(N):
-        # Position kinematics (Euler)
-        constraints += [
-            x[k + 1] == x[k] + c_pos * vx[k],
-            z[k + 1] == z[k] + c_pos * vz[k],
-        ]
-        constraints += glideslope_constraint(x[k], z[k], gamma_gs_deg)
-        constraints += thrust_magnitude_constraint(
-            Tx[k], Tz[k], sigma[k], vehicle.T_min / F, vehicle.T_max / F
-        )
-        constraints += pointing_constraint(
-            Tx[k], Tz[k], sigma[k], theta_max_deg
-        )
-        constraints += mass_dynamics_linear(
-            m[k], m[k + 1], sigma[k], dt, vehicle.isp, coeff=c_mass
-        )
+    # Everything below is vectorised over the horizon rather than built in a
+    # Python loop. The loop form compiles ~300x slower, which is the difference
+    # between a viewer slider that responds and one that does not.
+    constraints += [
+        x[1:] == x[:-1] + c_pos * vx[:-1],
+        z[1:] == z[:-1] + c_pos * vz[:-1],
+    ]
+    constraints += glideslope_constraint(x, z, gamma_gs_deg)
+    constraints += thrust_magnitude_constraint(
+        Tx, Tz, sigma, vehicle.T_min / F, vehicle.T_max / F
+    )
+    constraints += pointing_constraint(Tx, Tz, sigma, theta_max_deg)
+    constraints += mass_dynamics_linear(
+        m[:-1], m[1:], sigma, dt, vehicle.isp, coeff=c_mass
+    )
 
     constraints += [z >= 0.0]                      # never underground
     constraints += [m >= vehicle.m_dry / M]        # cannot burn past dry mass
     constraints += [m <= 1.0]
+
+    # ------------------------------------------------------------------
+    # Mass reference as a Parameter, so the problem compiles once
+    # ------------------------------------------------------------------
+    # The velocity update needs T / m_ref. Dividing a Variable by a Parameter is
+    # not DPP-compliant, so the parameter carries the *reciprocal* mass instead:
+    # parameter * variable is parameter-affine and CVXPY can cache the
+    # compilation across the whole mass-reference loop.
+    inv_m = cp.Parameter(N, name="inv_m_ref", pos=True)
+
+    constraints += [
+        vx[1:] == vx[:-1] + c_vel * cp.multiply(inv_m, Tx),
+        vz[1:] == vz[:-1] + c_vel * cp.multiply(inv_m, Tz) - c_grav,
+    ]
+    problem = cp.Problem(objective, constraints)
 
     # ------------------------------------------------------------------
     # Velocity dynamics: fixed-mass reference, iterated to convergence
@@ -323,34 +337,29 @@ def solve_landing(
     # profile as the new reference, repeat. This is a stripped-down SCvx:
     # successive linearisation without the trust region.
     def solve_with_mass_reference(m_ref, iteration):
-        vel_constraints = []
-        for k in range(N):
-            m_k_ref = float(m_ref[k]) / M   # scalar, NOT a cp.Variable
-            vel_constraints += [
-                vx[k + 1] == vx[k] + c_vel * Tx[k] / m_k_ref,
-                vz[k + 1] == vz[k] + c_vel * Tz[k] / m_k_ref - c_grav,
-            ]
+        # Only the parameter changes between iterations; the compiled problem
+        # is reused.
+        inv_m.value = M / np.asarray(m_ref[:N], dtype=float)
 
-        prob = cp.Problem(objective, constraints + vel_constraints)
         last_error = None
         for name in SOLVER_CHAIN:
             try:
-                prob.solve(solver=getattr(cp, name), verbose=False)
-                if prob.status is not None:
+                problem.solve(solver=getattr(cp, name), verbose=False)
+                if problem.status is not None:
                     break
             except Exception as exc:       # noqa: BLE001 - try the next solver
                 last_error = exc
                 continue
-        if prob.status is None and last_error is not None:
+        if problem.status is None and last_error is not None:
             raise last_error
 
         if verbose:
-            if prob.status in ("optimal", "optimal_inaccurate"):
-                print(f"  Iteration {iteration}: status = {prob.status}, "
+            if problem.status in ("optimal", "optimal_inaccurate"):
+                print(f"  Iteration {iteration}: status = {problem.status}, "
                       f"fuel = {fuel_scaled.value * M:,.1f} kg")
             else:
-                print(f"  Iteration {iteration}: status = {prob.status}")
-        return prob
+                print(f"  Iteration {iteration}: status = {problem.status}")
+        return problem
 
     # Initial mass reference: the *minimum-thrust* mass profile.
     #
