@@ -32,7 +32,7 @@ glance. The translucent cone is the glideslope corridor.
 | **Export** | full run as JSON — parameters plus trajectory |
 | **Re-solve** | `r`, or automatically on any control change |
 
-Six problems are registered — one per day of work, plus the Week 1 3-DoF
+Seven problems are registered — one per day of work, plus the Week 1 3-DoF
 optimiser. The Day 5 entry is the first whose attitude the optimiser actually
 solves for rather than infers from the thrust vector, so the vehicle in the
 scene genuinely flips: 60° at entry, overshooting past vertical to −17° as it
@@ -45,6 +45,7 @@ steers off the lateral velocity the flip created, upright at touchdown.
 | Day 3 — constrained landing | glideslope, throttle and gimbal limits as live sliders |
 | Day 4 — free final time | the duration is searched, and losslessness is enforced |
 | Day 5 — flip-and-land | attitude is a solved state; SCvx with trust regions |
+| Day 6 — unpowered aero entry | the belly-flop, engines off, where the delta-v is saved |
 | Week 1 — 3-DoF powered descent | full 3-D translation with cone constraints |
 
 The Day 2 entry propagates the verified variable-mass model rather than
@@ -80,7 +81,7 @@ published results in the trajectory-optimization literature.
 | Day 3 | Constrained landing: glideslope, throttle bounds, gimbal limit | done |
 | Day 4 | Free final time + trapezoidal collocation | done |
 | Day 5 | Rotational dynamics, the flip, and a working SCvx trust-region loop | done |
-| Day 3 | Constrained landing: glideslope, thrust bounds, pointing limit | done |
+| Day 6 | Aerodynamics: the belly-flop, and a two-phase entry | done |
 | Week 1 | 3-DoF convex powered descent, glideslope + tilt cones | done |
 | Week 2 | Sequential Convex Programming (SCvx) solver | next |
 | Week 3 | 6-DoF rigid-body dynamics with quaternions | |
@@ -136,6 +137,45 @@ velocity-update coefficient `dt/m` (~3×10⁻⁶) span twelve orders of magnitud
 Clarabel raises `SolverError` on some instances — indistinguishable from
 infeasibility unless you cross-check solvers. Scaling every quantity by a
 characteristic value makes the constraint sweeps smooth and monotone.
+
+### Aerodynamics (Day 6)
+
+`Cd·A` is **28.3× larger** broadside than base-first — 540 m² against 19 m² — so
+attitude is an air brake. Falling 12 km with the engines off:
+
+| configuration | arrival speed |
+|---|---|
+| no atmosphere | 494.0 m/s |
+| nose-first | 357.5 m/s |
+| **belly-flop** | **64.0 m/s** |
+
+The belly-flop removes **430 m/s for free**, worth ~16,300 kg of propellant by
+the rocket equation — more than the entire landing burn costs.
+
+**Drag saves nothing during the burn.** The same powered landing with drag on and
+off costs 14,785 kg and 14,783 kg, despite peak aerodynamic deceleration of
+86 m/s². Minimum throttle flows 861 kg/s and the engines must run the whole
+descent, so propellant is set by *burn duration*, not by how much work the
+engines do. Drag lets the optimiser throttle down, which is exactly what it
+cannot do.
+
+That is why this is built as **two phases** rather than the one the guide
+specifies — which is infeasible at every entry attitude and burn duration, for
+reasons traced in [docs/aerodynamics.md](docs/aerodynamics.md). Coast unpowered
+to terminal velocity, then burn briefly:
+
+| handoff attitude | shortest burn | propellant |
+|---|---|---|
+| 0° | 4 s | **3,874 kg** |
+| 30° | 6 s | 5,746 kg |
+| 60° | 15 s | 14,820 kg |
+
+The pipeline lands on **4,255 kg — 3.5× less than the single-phase flip** — with
+the ignition point searched rather than assumed.
+
+*Known limitation:* the model cannot flip 90° under power at terminal velocity —
+64 m/s allows only ~5 s of burn before the throttle floor over-decelerates. A
+real Starship flips on its **flaps**, unpowered, which this model does not have.
 
 ### The flip (Day 5)
 

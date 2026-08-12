@@ -97,12 +97,13 @@ sys.path.insert(0, REPO_ROOT)
 RESULTS = os.path.join(REPO_ROOT, "results")
 
 from src.dynamics_6dof import Vehicle6DoF, G0, G_EARTH     # noqa: E402
+from src.aero import AeroConfig, aero_acceleration          # noqa: E402
 
 SOLVER_CHAIN = ("CLARABEL", "SCS")
 
 
 def feasible_entry_state(vehicle=None, t_burn=15.0, theta0_deg=60.0,
-                         t_flip=3.0, margin=1.25):
+                         t_flip=3.0, margin=1.25, aero=None):
     """
     Entry altitude and vertical speed a `t_burn` burn can actually null.
 
@@ -111,26 +112,39 @@ def feasible_entry_state(vehicle=None, t_burn=15.0, theta0_deg=60.0,
     the burn decelerates less. The attitude profile is assumed to be the same
     fast flip used to seed the optimiser.
 
+    **Sized on thrust alone, deliberately, even when aero is active.** The
+    obvious refinement - add the velocity drag will remove and demand an entry
+    fast enough to absorb both - was tried and is wrong. It produces entry
+    states (250 m/s at 1250 m for a 10 s burn) that are infeasible for the
+    optimiser even with drag switched off, because a one-dimensional vertical
+    budget takes no account of the altitude, attitude and corridor coupling that
+    actually binds.
+
+    Drag is better treated as what it is here: a perturbation the optimiser
+    absorbs by throttling down. Sizing the entry against thrust and gravity, and
+    letting the aero forcing be trimmed away, solves cleanly at every entry
+    attitude from 0 to 60 degrees.
+
     Returns
     -------
     (z0, vz0) : tuple of float
     """
     vehicle = vehicle or Vehicle6DoF()
-    n = 800
+    n = 400
     t = np.linspace(0.0, t_burn, n)
     theta = np.radians(theta0_deg) * np.clip(1.0 - t / t_flip, 0.0, 1.0)
 
     mdot_min = vehicle.T_min / (vehicle.isp * G0)
     m_t = np.maximum(vehicle.m_wet - mdot_min * t, vehicle.m_dry)
-    a_min = vehicle.T_min * np.cos(theta) / m_t - G_EARTH
+    a_thrust = vehicle.T_min * np.cos(theta) / m_t - G_EARTH
 
-    v_required = float(np.trapezoid(a_min, t))
-    if v_required <= 0:
+    v_thrust = float(np.trapezoid(a_thrust, t))
+    if v_thrust <= 0:
         raise ValueError("Minimum thrust cannot arrest a descent at this attitude.")
 
-    vz0 = -v_required * margin
-    z0 = abs(vz0) * t_burn / 2.0
-    return float(z0), float(vz0)
+    vz0 = -v_thrust * margin
+    return float(abs(vz0) * t_burn / 2.0), float(vz0)
+
 
 
 def max_entry_pitch_note(vehicle=None):
@@ -166,6 +180,7 @@ def max_entry_pitch_note(vehicle=None):
 
 def solve_flip_landing(
     vehicle: Vehicle6DoF = None,
+    aero: AeroConfig = None,
     N: int = 80,
     t_burn: float = 15.0,
     x0: float = None,
@@ -183,6 +198,7 @@ def solve_flip_landing(
     tol_deg: float = 0.05,
     defect_tol: float = 0.01,
     fuel_tol_kg: float = 2.0,
+    aero_ramp_iters: int = 6,
     verbose: bool = True,
 ):
     """
@@ -226,7 +242,8 @@ def solve_flip_landing(
         t_flip = float(np.clip(1.4 * theta0 / vehicle.omega_max, 1.5, 0.6 * t_burn))
 
     if z0 is None or vz0 is None:
-        z_auto, vz_auto = feasible_entry_state(vehicle, t_burn, theta0_deg, t_flip)
+        z_auto, vz_auto = feasible_entry_state(vehicle, t_burn, theta0_deg,
+                                               t_flip, aero=aero)
         z0 = z_auto if z0 is None else z0
         vz0 = vz_auto if vz0 is None else vz0
     if x0 is None:
@@ -301,6 +318,16 @@ def solve_flip_landing(
     p_trust = cp.Parameter(nonneg=True, name="trust")
     p_u = cp.Parameter(N, name="tau_ref")
     p_trust_u = cp.Parameter(nonneg=True, name="trust_tau")
+    # Aerodynamic acceleration, evaluated on the reference trajectory and fed in
+    # as a known forcing term. Drag goes as rho(z) |v| v with an area that
+    # depends on attitude - a product of four states, hopeless to convexify
+    # directly. But it is a *perturbation*: it changes slowly between SCvx
+    # iterations, so evaluating it on the previous iterate and letting the
+    # optimiser trim thrust around it converges for the same reason the mass and
+    # attitude references do. The trust regions already in place bound how far
+    # the trajectory can move before the forcing term is recomputed.
+    p_ax = cp.Parameter(N, name="aero_ax")
+    p_az = cp.Parameter(N, name="aero_az")
 
     cons = [
         x[0] == x0 / L, z[0] == z0 / L,
@@ -323,9 +350,9 @@ def solve_flip_landing(
         # Linearised thrust-attitude coupling folded straight into the
         # velocity update, with the mass reference already divided in.
         vx[1:] == vx[:-1] + cp.multiply(q_sin, s) + cp.multiply(q_a, th[:-1])
-        - q_c + cp.multiply(qu_x, u),
+        - q_c + cp.multiply(qu_x, u) + p_ax,
         vz[1:] == vz[:-1] + cp.multiply(q_cos, s) - cp.multiply(q_b, th[:-1])
-        + q_d - cp.multiply(qu_z, u) - c_grav,
+        + q_d - cp.multiply(qu_z, u) - c_grav + p_az,
     ]
 
     # --- bounds and path constraints ----------------------------------
@@ -363,6 +390,27 @@ def solve_flip_landing(
                             vehicle.m_dry + 1000.0), N + 1) / M
     trust = np.radians(trust0_deg)
     trust_u = 2.0            # torque is normalised to [-1, 1]; start unbounded
+
+    # State reference for the aero forcing term. Seeded with a straight-line
+    # descent; replaced by the solved trajectory from the second iteration on.
+    z_ref = np.linspace(z0, 0.0, N + 1)
+    vx_ref = np.linspace(vx0, 0.0, N + 1)
+    vz_ref = np.linspace(vz0, 0.0, N + 1)
+
+    # Homotopy on the aero forcing.
+    #
+    # Switching drag on at full strength from a straight-line seed makes the
+    # first subproblem infeasible at every entry attitude, including upright:
+    # the forcing is evaluated on a trajectory that does not exist, and the
+    # optimiser is handed a deceleration profile no admissible control can
+    # reconcile. But the aero-free problem is known to solve. So walk the
+    # parameter in - each step warm-starts from a converged trajectory one
+    # notch weaker, and the reference is never far from the forcing computed on
+    # it. This is continuation, and it is the difference between "infeasible at
+    # every setting" and a solution.
+    aero_on = aero is not None and aero.enabled
+    aero_scale = 0.0 if aero_on else 1.0
+    ramp_steps = max(int(aero_ramp_iters), 1)
 
     def _linear_coeffs():
         """
@@ -404,6 +452,19 @@ def solve_flip_landing(
         p_trust.value = float(trust)
         p_u.value = u_ref
         p_trust_u.value = float(trust_u)
+
+        if aero is not None and aero.enabled:
+            ax, az = aero_acceleration(
+                vx_ref[:N], vz_ref[:N], z_ref[:N], theta_ref[:N],
+                m_ref[:N] * M, aero,
+            )
+            # Convert to the non-dimensional velocity increment per step, scaled
+            # by the homotopy parameter.
+            p_ax.value = aero_scale * dt * np.asarray(ax) / V
+            p_az.value = aero_scale * dt * np.asarray(az) / V
+        else:
+            p_ax.value = np.zeros(N)
+            p_az.value = np.zeros(N)
 
     def solve_once():
         for name in SOLVER_CHAIN:
@@ -496,9 +557,21 @@ def solve_flip_landing(
         s_ref = s_v.copy()
         m_ref = m_v.copy()
         u_ref = u_v.copy()
+        # State reference for the aero forcing term, back in physical units.
+        z_ref = np.asarray(z.value) * L
+        vx_ref = np.asarray(vx.value) * V
+        vz_ref = np.asarray(vz.value) * V
         accepted += 1
 
-        tight = defect < defect_tol
+        # Advance the homotopy once the current level has settled, and hold the
+        # convergence test until the full aero model is actually in play.
+        ramping = aero_on and aero_scale < 1.0
+        if ramping and defect < defect_tol * 4.0:
+            aero_scale = min(1.0, aero_scale + 1.0 / ramp_steps)
+            trust = max(trust, np.radians(2.0))   # room to absorb the new force
+            trust_u = max(trust_u, 0.2)
+
+        tight = defect < defect_tol and not ramping
         if tight:
             trust = min(trust * 1.6, np.radians(trust_max_deg))
             trust_u = min(trust_u * 1.6, 2.0)
@@ -568,7 +641,21 @@ def solve_flip_landing(
         "t_burn": t_burn,
         "gamma_gs_deg": gamma_gs_deg,
         "theta0_deg": theta0_deg,
+        "aero": aero,
     }
+
+    if aero is not None and aero.enabled:
+        ax, az = aero_acceleration(
+            result["vx"][:N], result["vz"][:N], result["z"][:N],
+            result["theta"][:N], result["m"][:N], aero,
+        )
+        result["aero_ax"] = np.asarray(ax)
+        result["aero_az"] = np.asarray(az)
+        result["aero_accel"] = np.hypot(ax, az)
+        from src.aero import dynamic_pressure, drag_area
+        result["q"] = np.asarray(
+            dynamic_pressure(result["vx"], result["vz"], result["z"]))
+        result["drag_area"] = np.asarray(drag_area(result["theta"], aero))
 
     if verbose:
         print(f"\n  SOLUTION FOUND")

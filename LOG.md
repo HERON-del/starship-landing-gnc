@@ -342,6 +342,98 @@ already showed trapezoidal cutting this 7×; porting `src/discretization.py` int
 - Trapezoidal collocation in the flip optimiser, judged by the replay error
 - Free final time for the flip
 
+---
+
+## Day 6 — 2026-08-13
+
+### Done
+- `src/atmosphere.py`, `src/aero.py`: exponential atmosphere, attitude-dependent
+  area and Cd, drag, lift, dynamic pressure
+- `src/dynamics_aero.py`: 6-DoF plus air, and the unpowered entry phase
+- `src/landing_aero.py`: two-phase pipeline with a searched ignition point
+- `tests/test_aero.py`: 6 groups, all passing (8 suites green overall)
+- `entry-aero` added to the viewer; `docs/aerodynamics.md`
+
+### Built differently from the guide, for a measured reason
+The guide models aerodynamics and a lit engine over the same 25–30 s window.
+Built exactly as written that is **infeasible at every entry attitude (0–60°)
+and every burn duration (5–15 s)**. I tried three fixes and ruled each out by
+measurement: an aero-aware entry sizer, a homotopy ramping drag in from a known
+feasible λ = 0, and both together.
+
+The decisive test was that the aero-sized entry state is infeasible **with drag
+switched off**. So it was never the drag forcing — a one-dimensional vertical
+velocity budget ignores the altitude, attitude and corridor coupling that
+actually binds. Sizing the entry on thrust alone and letting drag be a
+perturbation solves cleanly at every attitude.
+
+My aero-aware sizer also diverged to 5,584 m/s before that, because I wrote it
+as a one-sided fixed point when drag grows as `v²` and the requirement grows as
+`v` — there is a *window*, not a floor. Correct diagnosis, irrelevant fix.
+
+### The finding that reshaped the day
+Same problem, drag on and off:
+
+| | no aero | with aero |
+|---|---|---|
+| 60° entry, 15 s burn | 14,783 kg | 14,785 kg |
+
+**Identical**, despite peak aerodynamic deceleration of 86 m/s² — more than the
+engines can produce. The throttle floor explains it: minimum throttle flows
+861 kg/s and the engines run the whole descent, so propellant is set by *burn
+duration*, not by how much work the engines do. Drag lets the optimiser throttle
+down, and throttling down is exactly what it cannot do.
+
+If aerodynamics buy nothing while the engines are lit, the guide's single-phase
+model is the wrong shape.
+
+### Where the belly-flop actually pays
+Unpowered from 12 km to 300 m, engines off:
+
+| configuration | arrival | coast |
+|---|---|---|
+| no atmosphere | 494.0 m/s | 38 s |
+| nose-first | 357.5 m/s | 42 s |
+| **belly-flop** | **64.0 m/s** | 131 s |
+
+`Cd·A` is 28.3× larger broadside (540 m² vs 19 m²). The belly-flop removes
+**430 m/s for free** — ~16,300 kg by the rocket equation, more than the entire
+landing burn costs. The whole value is in the coast, engines off. That is why the
+real vehicle flips immediately *before* ignition, not during it.
+
+### Two-phase result
+Coasting is free, burning is charged by the second, and burn duration is coupled
+to handoff attitude because the flip is rate-limited:
+
+| handoff | shortest burn | propellant |
+|---|---|---|
+| 0° | 4 s | **3,874 kg** |
+| 30° | 6 s | 5,746 kg |
+| 60° | 15 s | 14,820 kg |
+
+The pipeline lands on **4,255 kg — 3.5× less than Day 5's 14,775 kg**, with the
+ignition point found rather than assumed (same method as Day 2's suicide-burn
+trigger).
+
+### Also learned
+Dynamic pressure does **not** decay as the vehicle slows — it converges. At
+terminal velocity drag balances weight, so `q = mg/(Cd·A)` is pinned by the
+vehicle, not the altitude: rising density exactly offsets falling speed.
+Measured 2.42 kPa against 2.36 kPa predicted. My first test asserted monotonic
+decay and failed; the model was right and the test was wrong.
+
+### Honest limitation
+The model still cannot flip 90° under power at terminal velocity: at 64 m/s the
+throttle floor allows only ~5 s of burn, and a 90° flip needs longer. So the
+pipeline hands over near-upright and phase 2 does not perform the flip. This is
+the Day 5 entry-pitch ceiling again, and the resolution is the same — a real
+Starship flips on its **flaps**, unpowered. Modelling the flaps is what closes
+this gap; nothing in the current model substitutes for them.
+
+### Tomorrow (Day 7)
+- Aerodynamic control surfaces, so the flip can happen unpowered
+- Trapezoidal collocation in the flip optimiser (still outstanding from Day 5)
+
 ### Time spent
 _X hours_
 
