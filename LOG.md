@@ -230,6 +230,104 @@ _X hours_
 
 ---
 
+## Day 5 — 2026-08-12
+
+### Done
+- Built `src/dynamics_6dof.py`: planar 6-DoF with pitch, pitch rate and gimbal torque
+- Built `tests/test_6dof.py`: 4 verification groups, exact to machine precision
+- Built `src/landing_flip.py`: flip-and-land optimiser with a real SCvx loop
+- Built `tests/test_flip.py`: 6 groups including a non-linear replay and a
+  constraint-interaction probe
+- Wrote `docs/flip-and-scvx.md`; exploration in `notebooks/05_flip_exploration.ipynb`
+
+### Result
+60° entry → upright landing, 15 s burn, **14,775 kg**, converged in 18 SCvx
+iterations with a linearisation defect of 0.0003 of maximum thrust. Every limit
+respected: pitch rate at its 28.6 °/s bound, gimbal at 15°, throttle inside
+[T_min, T_max], glideslope clean. The flip tax against an upright entry is
++1,092 kg, about +8%.
+
+### The modelling trap I nearly walked into
+The obvious formulation makes `tau` an independent variable bounded by
+`±sigma L sin(delta_max)`. That gives the optimiser **free torque with no effect
+on thrust direction** — it will rotate the vehicle while thrusting somewhere
+unrelated, solve happily, and report a plausible fuel number for a vehicle that
+does not exist. The engine is bolted on; torque and thrust tilt come from the
+same deflection. I kept the coupling as an equality and linearised it.
+
+### Three things that made SCvx actually converge
+All three were found by the loop failing, not by design.
+
+1. **Every solved subproblem must advance the reference.** The textbook
+   "reject the step and shrink the region" deadlocks: the region tightens around
+   a point the solution is far from, so the next solve is strictly harder, and it
+   walks down to the minimum region size and reports infeasible. The defect
+   should size the *next* region, not veto the current step.
+2. **The torque needs its own trust region.** The gimbal expansion point is the
+   previous torque solution, which is bang-bang; unbounded it flips sign between
+   iterations. Constraining `theta` alone left the defect oscillating around
+   0.12 forever. Adding a torque region drove it to 0.0003.
+3. **Expand about the previous gimbal angle, not zero.** Expanding about
+   `delta = 0` drops `0.5 sin(theta) delta²`, worth 0.034 of max thrust at the
+   15° limit — a floor no iterating can clear, and it showed up as a defect that
+   stopped improving at exactly 0.036.
+
+Seeding matters as much as the loop. `linspace(theta0, 0)` across the whole burn
+implies a 4.7 °/s rotation; this vehicle flips at 28.6 °/s. That seed is
+infeasible at every trust size where a fast-flip seed solves fine.
+
+### The entry-pitch ceiling — the best physical result so far
+The optimiser cannot fly a 90° belly-flop, and the reason is physical. The engine
+is lit throughout, so while tilted it pushes the vehicle sideways at up to
+21 m/s² whether it wants to or not. The pitch rate is capped, so the flip takes
+at least `theta0/omega_max` seconds, and the excursion built in that window must
+fit the glideslope corridor *and* be nulled by touchdown.
+
+Holding the entry fixed: 65° solves, 70° does not. Removing **either** the
+glideslope **or** the pitch-rate limit makes 70° solve — which is what proves
+the two bind together rather than one being the culprit. Raising `omega_max` to
+51 °/s lifts the auto-sized ceiling from 40° to 55°.
+
+**A real Starship flips before the landing burn, unpowered, on aerodynamic
+surfaces.** That is exactly the freedom this model lacks. Best interview answer
+the project has produced.
+
+### Also learned
+The rotation here is **rate-limited, not torque-limited** — pitch rate pins to
+its bound almost immediately while peak torque stays well under maximum. A
+stronger gimbal would not flip this vehicle faster; only a higher `omega_max`
+would. And the attitude does not settle monotonically: it overshoots past
+vertical and returns, because tilting the other way is the optimiser's only means
+of cancelling the sideways velocity the flip itself created.
+
+### Problems hit
+- The guide's bang-bang flip test spun the vehicle through **−742°**, two full
+  revolutions. Its timings assume far weaker control authority; `alpha_max` here
+  is 94.7 °/s², so a 90° rest-to-rest rotation takes ~2 s, not 9. Derived the
+  timings from the vehicle instead. A symmetric bang-bang also cannot null both
+  attitude and rate — thrust differs between the two phases — which is itself
+  the argument for solving rather than scheduling.
+- The guide's default entry state (`vz0 = -80`, `t_burn = 25`) is infeasible for
+  the same minimum-throttle reason as Day 3. A 25 s burn needs `|vz0| ≈ 285` m/s.
+- My own `Set-Content -Encoding utf8` wrote a BOM into a source file and broke
+  the parse. PowerShell 5.1 needs `UTF8Encoding($false)`.
+
+### Known limitation
+The flip optimiser still discretises with forward Euler. Replaying the commanded
+control through the verified simulator lands **66.7 m from the pad, 4.0% of the
+descent** — attitude is good to 0.37°, it is the translation that drifts. Day 4
+already showed trapezoidal cutting this 7×; porting `src/discretization.py` into
+`landing_flip.py` is the outstanding action.
+
+### Tomorrow (Day 6)
+- Trapezoidal collocation in the flip optimiser, judged by the replay error
+- Free final time for the flip
+
+### Time spent
+_X hours_
+
+---
+
 ## Day 3 — 2026-08-10
 
 ### Done

@@ -75,6 +75,7 @@ published results in the trajectory-optimization literature.
 | Day 2 | Variable-mass dynamics + verified RK4 integrator, live in the viewer | done |
 | Day 3 | Constrained landing: glideslope, throttle bounds, gimbal limit | done |
 | Day 4 | Free final time + trapezoidal collocation | done |
+| Day 5 | Rotational dynamics, the flip, and a working SCvx trust-region loop | done |
 | Day 3 | Constrained landing: glideslope, thrust bounds, pointing limit | done |
 | Week 1 | 3-DoF convex powered descent, glideslope + tilt cones | done |
 | Week 2 | Sequential Convex Programming (SCvx) solver | next |
@@ -131,6 +132,48 @@ velocity-update coefficient `dt/m` (~3×10⁻⁶) span twelve orders of magnitud
 Clarabel raises `SolverError` on some instances — indistinguishable from
 infeasibility unless you cross-check solvers. Scaling every quantity by a
 characteristic value makes the constraint sweeps smooth and monotone.
+
+### The flip (Day 5)
+
+![Flip-and-land trajectory](results/day5_flip_landing.png)
+
+Planar 6-DoF: the state grows to `[x, z, vx, vz, theta, omega, m]` and the
+vehicle must rotate to vertical while decelerating, translating to the pad, and
+arriving upright with no residual rotation. A 60° entry lands in a 15 s burn on
+**14,775 kg**, converging in 18 SCvx iterations to a linearisation defect of
+0.0003 of maximum thrust.
+
+**The trap.** The engine is bolted to the vehicle, so thrust direction *is*
+attitude plus a 15° gimbal — and torque and thrust tilt come from the same
+deflection. Making `tau` an independent variable bounded by `±sigma L
+sin(delta_max)` hands the optimiser free torque with no effect on thrust
+direction: it rotates the vehicle while thrusting somewhere unrelated, solves
+happily, and reports a plausible number for a vehicle that does not exist. The
+coupling is kept as an equality here and linearised.
+
+**A real trust-region loop.** Day 4 flagged trust regions as the missing third
+pillar of SCvx; here they are load-bearing. Three things had to be right, each
+found by the loop failing: every solved subproblem must advance the reference
+(rejecting steps deadlocks), the torque needs its own trust region (its bang-bang
+solution flips sign between iterations), and the gimbal must be expanded about
+its previous value rather than zero (else a `0.5 sin(theta) delta²` term floors
+the defect at 0.036). Details in
+[docs/flip-and-scvx.md](docs/flip-and-scvx.md).
+
+**The entry-pitch ceiling.** The optimiser cannot fly a 90° belly-flop. The
+engine is lit throughout, so while tilted it pushes the vehicle sideways at up to
+21 m/s²; the pitch rate is capped, so the flip takes at least
+`theta0/omega_max` seconds, and the excursion built in that window must fit the
+glideslope corridor and still be nulled by touchdown. Holding the entry fixed,
+65° solves and 70° does not — and removing *either* the glideslope *or* the
+pitch-rate limit recovers it, which is what shows the two bind together. A real
+Starship flips **before** the landing burn, unpowered, on aerodynamic surfaces;
+that is exactly the freedom this model lacks.
+
+*Known limitation:* the flip optimiser still uses forward Euler. Replaying its
+commanded control through the verified non-linear simulator lands 66.7 m from
+the pad — 4.0% of the descent, against 0.37° of attitude error. Porting the Day 4
+trapezoidal collocation here is the outstanding action.
 
 ### Free final time (Day 4)
 
