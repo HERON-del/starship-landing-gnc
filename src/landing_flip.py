@@ -144,17 +144,17 @@ def max_entry_pitch_note(vehicle=None):
     seconds, and the sideways excursion accumulated in that window has to fit
     inside the glideslope corridor and still be nulled by touchdown.
 
-    Where the ceiling sits depends on how the entry state is chosen, so quote
-    both. Holding the entry fixed at (1664 m, -222 m/s) and sweeping only the
-    attitude, 65 degrees solves and 70 does not; removing *either* the
-    glideslope or the pitch-rate limit makes 70 solve, which is what identifies
-    the two as binding together. Letting `feasible_entry_state` re-size the
-    entry for each attitude - what the defaults do - the ceiling drops to 40
-    degrees feasible, 50 not, because a more tilted entry also decelerates less
-    and demands a different arrival state.
+    Measured at N = 80, t_burn = 15 s, with the entry state re-sized for each
+    attitude:
 
-    Either way the mechanism is the same, and raising omega_max to 51 deg/s
-    lifts the ceiling from 40 to 55 degrees.
+        nominal, glideslope 75 deg   60 deg feasible, 65 not
+        glideslope loosened to 45    65 deg          (+5)
+        omega_max 28.6 -> 51.6 deg/s 75 deg          (+15)
+
+    Relaxing *either* constraint alone moves the ceiling, which is what shows
+    the two bind together rather than one being the culprit. The pitch rate is
+    much the stronger lever - consistent with the rotation being rate-limited
+    rather than torque-limited, since peak torque stays well under maximum.
 
     A real Starship flips before the landing burn, unpowered, on aerodynamic
     surfaces. That is precisely the freedom this model does not have.
@@ -446,6 +446,11 @@ def solve_flip_landing(
     history = []
     status = None
     accepted = 0
+    # Keep the best iterate rather than trusting whichever solve happened to be
+    # last. A single infeasible subproblem at the end of the run - easy to hit
+    # when the trust region has just grown - would otherwise discard a perfectly
+    # good converged answer.
+    best = None
 
     for it in range(1, max_iters + 1):
         push_params()
@@ -469,6 +474,18 @@ def solve_flip_landing(
         defect = linearisation_defect(s_v, th_v, u_v)
         fuel = float((1.0 - m_v[-1]) * M)
         history.append((it, np.degrees(step), defect, fuel))
+
+        # Prefer a low defect; break ties on fuel. A cheap trajectory whose
+        # linear model does not describe it is worth less than an honest one.
+        snapshot = dict(
+            x=np.asarray(x.value), z=np.asarray(z.value),
+            vx=np.asarray(vx.value), vz=np.asarray(vz.value),
+            th=th_v.copy(), w=np.asarray(w.value), m=m_v.copy(),
+            s=s_v.copy(), u=u_v.copy(),
+            defect=defect, fuel=fuel, status=status, iteration=it,
+        )
+        if best is None or (defect, fuel) < (best["defect"], best["fuel"]):
+            best = snapshot
 
         # A solved subproblem always advances the reference. Rejecting it and
         # re-solving around the *same* reference with a smaller region is a
@@ -511,14 +528,14 @@ def solve_flip_landing(
     # ------------------------------------------------------------------
     # Package
     # ------------------------------------------------------------------
-    if status not in ("optimal", "optimal_inaccurate") or th.value is None:
+    if best is None:
         if verbose:
             print(f"\n  NO SOLUTION - status: {status}")
         return {"status": status or "infeasible"}
 
-    s_v = np.asarray(s.value)
-    u_v = np.asarray(u.value)
-    th_v = np.asarray(th.value)
+    s_v = best["s"]
+    u_v = best["u"]
+    th_v = best["th"]
 
     sigma = s_v * F
     tau = u_v * TAU
@@ -529,23 +546,24 @@ def solve_flip_landing(
 
     result = {
         "t": t_grid,
-        "x": np.asarray(x.value) * L,
-        "z": np.asarray(z.value) * L,
-        "vx": np.asarray(vx.value) * V,
-        "vz": np.asarray(vz.value) * V,
+        "x": best["x"] * L,
+        "z": best["z"] * L,
+        "vx": best["vx"] * V,
+        "vz": best["vz"] * V,
         "theta": th_v,
-        "omega": np.asarray(w.value) * W,
-        "m": np.asarray(m.value) * M,
+        "omega": best["w"] * W,
+        "m": best["m"] * M,
         "sigma": sigma,
         "tau": tau,
         "delta": delta,
         "Tx": Tx,
         "Tz": Tz,
-        "status": status,
-        "fuel": float(vehicle.m_wet - m.value[-1] * M),
+        "status": best["status"],
+        "fuel": float(vehicle.m_wet - best["m"][-1] * M),
         "iterations": len(history),
         "accepted": accepted,
-        "final_defect": history[-1][2] if history else None,
+        "best_iteration": best["iteration"],
+        "final_defect": best["defect"],
         "history": history,
         "t_burn": t_burn,
         "gamma_gs_deg": gamma_gs_deg,

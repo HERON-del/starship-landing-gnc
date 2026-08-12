@@ -102,22 +102,25 @@ so the flip takes at least `theta0 / omega_max` seconds, and the lateral
 excursion accumulated in that window must fit inside the glideslope corridor and
 still be nulled by touchdown.
 
-Holding the entry state fixed and sweeping only attitude, 65° solves and 70°
-does not. Removing **either** the glideslope **or** the pitch-rate limit makes
-70° solve — which is what identifies the two as binding together rather than
-one being the culprit:
+Measured at N = 80, `t_burn` = 15 s, entry state re-sized for each attitude:
 
-| configuration | 70° entry |
+| configuration | highest feasible entry pitch |
 |---|---|
-| nominal | infeasible |
-| no glideslope | optimal, 14,736 kg |
-| no pitch-rate limit | optimal, 13,692 kg |
-| `omega_max` × 1.5 | optimal, 14,194 kg |
+| nominal, glideslope 75° | **60°** (65° infeasible) |
+| glideslope loosened to 45° | 65° (+5°) |
+| `omega_max` 28.6 → 51.6 °/s | **75°** (+15°) |
 
-Letting the entry state be re-sized per attitude — what the defaults do — the
-ceiling drops to 40° feasible, 50° not, because a more tilted entry also
-decelerates less and demands a different arrival state. Raising `omega_max` to
-51 °/s lifts that ceiling from 40° to 55°.
+Relaxing **either** constraint alone moves the ceiling, which is what shows the
+two bind together rather than one being the culprit. The pitch rate is much the
+stronger lever — consistent with the rotation being rate-limited rather than
+torque-limited, since peak torque stays well under maximum.
+
+> These numbers replace an earlier set (40° / 50°) that were measured before a
+> bug was fixed in the solver: it returned the status of the *last* SCvx
+> iteration rather than the best one, so a single infeasible subproblem at the
+> end of a run discarded a perfectly good converged answer and reported the
+> whole problem infeasible. Several "infeasible" points in the original sweep
+> were that bug, not physics. The mechanism was right; the boundary was not.
 
 **A real Starship flips before the landing burn, unpowered, on aerodynamic
 surfaces.** That is precisely the freedom this model does not have, and it is the

@@ -283,10 +283,16 @@ is lit throughout, so while tilted it pushes the vehicle sideways at up to
 at least `theta0/omega_max` seconds, and the excursion built in that window must
 fit the glideslope corridor *and* be nulled by touchdown.
 
-Holding the entry fixed: 65° solves, 70° does not. Removing **either** the
-glideslope **or** the pitch-rate limit makes 70° solve — which is what proves
-the two bind together rather than one being the culprit. Raising `omega_max` to
-51 °/s lifts the auto-sized ceiling from 40° to 55°.
+Measured at N = 80, 15 s burn, entry re-sized per attitude:
+
+| configuration | highest feasible entry pitch |
+|---|---|
+| nominal, glideslope 75° | **60°** (65° infeasible) |
+| glideslope loosened to 45° | 65° (+5°) |
+| `omega_max` 28.6 → 51.6 °/s | **75°** (+15°) |
+
+Relaxing **either** constraint alone moves the ceiling, which is what proves the
+two bind together. The pitch rate is much the stronger lever.
 
 **A real Starship flips before the landing burn, unpowered, on aerodynamic
 surfaces.** That is exactly the freedom this model lacks. Best interview answer
@@ -311,6 +317,19 @@ of cancelling the sideways velocity the flip itself created.
   the same minimum-throttle reason as Day 3. A 25 s burn needs `|vz0| ≈ 285` m/s.
 - My own `Set-Content -Encoding utf8` wrote a BOM into a source file and broke
   the parse. PowerShell 5.1 needs `UTF8Encoding($false)`.
+
+### Bug found while wiring Day 5 into the viewer
+`solve_flip_landing` returned the status of the **last** SCvx iteration rather
+than the best one. A single infeasible subproblem at the end of a run — easy to
+hit right after the trust region grows — discarded a perfectly good converged
+answer and reported the whole problem infeasible. It now keeps the best iterate,
+preferring low linearisation defect and breaking ties on fuel.
+
+This invalidated my first ceiling measurement: several "infeasible" points in
+that sweep were the bug rather than physics, and the published boundary
+(40°/50°) was wrong. Re-measured after the fix it is 60°/65°, and the effect of
+each relaxation is larger than I reported. The mechanism was right; the numbers
+were not. Corrected in the README and docs.
 
 ### Known limitation
 The flip optimiser still discretises with forward Euler. Replaying the commanded

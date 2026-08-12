@@ -131,6 +131,37 @@ def quat_from_vector(v: np.ndarray, up: np.ndarray | None = None) -> np.ndarray:
     return q / np.linalg.norm(q)
 
 
+def quats_from_pitch(theta: np.ndarray) -> np.ndarray:
+    """
+    Quaternions for a planar pitch angle measured from vertical.
+
+    `theta = 0` is upright, `theta = pi/2` is horizontal. The body axis points
+    along `(sin theta, cos theta, 0)`, matching the thrust convention in
+    dynamics_6dof, and the renderer builds its vehicle along +Y — so this is a
+    rotation of `-theta` about +Z.
+
+    Unlike `attitudes_from_thrust`, which infers an attitude the solver never
+    computed, this is the optimiser's own state variable. Use it whenever the
+    problem actually solves for attitude.
+
+    Parameters
+    ----------
+    theta : array-like, shape (n,)
+        Pitch from vertical [rad].
+
+    Returns
+    -------
+    np.ndarray, shape (n, 4)
+        Quaternions as [x, y, z, w].
+    """
+    theta = np.asarray(theta, dtype=float)
+    half = -0.5 * theta
+    out = np.zeros((theta.size, 4))
+    out[:, 2] = np.sin(half)
+    out[:, 3] = np.cos(half)
+    return out
+
+
 def attitudes_from_thrust(thrust: np.ndarray, rel_deadband: float = 0.02) -> np.ndarray:
     """
     Per-state attitude quaternions from an (N, 3) thrust history.

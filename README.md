@@ -32,8 +32,11 @@ glance. The translucent cone is the glideslope corridor.
 | **Export** | full run as JSON — parameters plus trajectory |
 | **Re-solve** | `r`, or automatically on any control change |
 
-Five problems are registered — one per day of work, plus the Week 1 3-DoF
-optimiser:
+Six problems are registered — one per day of work, plus the Week 1 3-DoF
+optimiser. The Day 5 entry is the first whose attitude the optimiser actually
+solves for rather than infers from the thrust vector, so the vehicle in the
+scene genuinely flips: 60° at entry, overshooting past vertical to −17° as it
+steers off the lateral velocity the flip created, upright at touchdown.
 
 | Problem | What it demonstrates |
 |---|---|
@@ -41,6 +44,7 @@ optimiser:
 | Day 2 — powered descent simulation | open-loop vs closed-loop guidance; it can crash |
 | Day 3 — constrained landing | glideslope, throttle and gimbal limits as live sliders |
 | Day 4 — free final time | the duration is searched, and losslessness is enforced |
+| Day 5 — flip-and-land | attitude is a solved state; SCvx with trust regions |
 | Week 1 — 3-DoF powered descent | full 3-D translation with cone constraints |
 
 The Day 2 entry propagates the verified variable-mass model rather than
@@ -164,11 +168,13 @@ the defect at 0.036). Details in
 engine is lit throughout, so while tilted it pushes the vehicle sideways at up to
 21 m/s²; the pitch rate is capped, so the flip takes at least
 `theta0/omega_max` seconds, and the excursion built in that window must fit the
-glideslope corridor and still be nulled by touchdown. Holding the entry fixed,
-65° solves and 70° does not — and removing *either* the glideslope *or* the
-pitch-rate limit recovers it, which is what shows the two bind together. A real
-Starship flips **before** the landing burn, unpowered, on aerodynamic surfaces;
-that is exactly the freedom this model lacks.
+glideslope corridor and still be nulled by touchdown. The nominal vehicle tops
+out at a **60°** entry pitch; loosening the glideslope to 45° lifts that to 65°,
+and raising the pitch-rate limit to 51.6 °/s lifts it to 75°. Relaxing *either*
+constraint alone moves the ceiling, which is what shows the two bind together —
+and the rate limit is much the stronger lever. A real Starship flips **before**
+the landing burn, unpowered, on aerodynamic surfaces; that is exactly the
+freedom this model lacks.
 
 *Known limitation:* the flip optimiser still uses forward Euler. Replaying its
 commanded control through the verified non-linear simulator lands 66.7 m from
