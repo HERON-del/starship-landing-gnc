@@ -32,8 +32,14 @@ glance. The translucent cone is the glideslope corridor.
 | **Export** | full run as JSON — parameters plus trajectory |
 | **Re-solve** | `r`, or automatically on any control change |
 
-Seven problems are registered — one per day of work, plus the Week 1 3-DoF
-optimiser. The Day 5 entry is the first whose attitude the optimiser actually
+Nine problems are registered — one per day of work, plus the Week 1 3-DoF
+optimiser. The Day 7 entry is the first that will render a problem with *no*
+solution: virtual control lets it return the least-infeasible trajectory
+alongside a measurement of the shortfall, where every earlier entry could only
+report the word `infeasible`. The Day 8 entry hands the burn duration to the
+solver and reports back what it chose against what you guessed.
+
+The Day 5 entry is the first whose attitude the optimiser actually
 solves for rather than infers from the thrust vector, so the vehicle in the
 scene genuinely flips: 60° at entry, overshooting past vertical to −17° as it
 steers off the lateral velocity the flip created, upright at touchdown.
