@@ -82,8 +82,10 @@ published results in the trajectory-optimization literature.
 | Day 4 | Free final time + trapezoidal collocation | done |
 | Day 5 | Rotational dynamics, the flip, and a working SCvx trust-region loop | done |
 | Day 6 | Aerodynamics: the belly-flop, and a two-phase entry | done |
+| Day 7 | SCvx: trust regions, virtual control, measured convergence | done |
+| Day 8 | Trapezoidal collocation, free final time, log-mass | done |
 | Week 1 | 3-DoF convex powered descent, glideslope + tilt cones | done |
-| Week 2 | Sequential Convex Programming (SCvx) solver | next |
+| Week 2 | Sequential Convex Programming (SCvx) solver | done |
 | Week 3 | 6-DoF rigid-body dynamics with quaternions | |
 | Week 4 | Aerodynamics, flap control, 6-DoF SCvx | |
 | Week 5 | Closed-loop MPC + Monte Carlo dispersion analysis | |
@@ -92,6 +94,64 @@ published results in the trajectory-optimization literature.
 ---
 
 ## Results so far
+
+### The complete solver (Day 8)
+
+Three numerical upgrades to the Day 7 loop: trapezoidal collocation, free final
+time, and a log-mass substitution.
+
+![Day 7 vs Day 8](results/day8_comparison.png)
+
+Trapezoidal collocation is the one that matters. Replaying the commanded
+throttle and gimbal through the independently verified nonlinear simulator, with
+the burn duration pinned so the discretisation is the only difference:
+
+| | replay miss on a 473 m descent |
+|---|---|
+| Euler (Day 7) | 3.575 m |
+| **trapezoidal (Day 8)** | **0.502 m** |
+
+Trapezoidal at N = 20 (0.499 m) beats Euler at N = 120 (2.308 m) — the
+higher-order rule buys back roughly six times the node count.
+
+Free final time makes `t_f` a real decision variable, which means confronting
+the `t_f * f(x, u)` product rather than declaring the variable and leaving it
+disconnected from the dynamics. It searches 6.0 → 7.5 → 6.8 → 7.55 → 7.76 s.
+The propellant figure decomposes: at a pinned 8 s, trapezoidal costs 7,246 kg
+against Euler's 7,209, so Euler was *understating* by 37 kg; free time then
+saves 132 kg against that corrected number, for a net 95 kg.
+
+Log-mass makes the objective linear — minimising propellant is exactly
+maximising `z_m[N]` — and un-freezes mass in the velocity rows, which Day 7 held
+fixed from the reference within each iteration.
+
+![Complete trajectory](results/day8_complete.png)
+
+### Successive convexification (Day 7)
+
+The ad-hoc reference iteration of Days 3–6 becomes an algorithm: virtual control
+on all seven dynamics rows, a hard trust region whose radius adapts on a step
+quality measured against forward-propagated true dynamics, and a convergence
+test on quantities that were actually measured.
+
+![SCvx convergence](results/day7_scvx_convergence.png)
+
+The second panel is the point. Virtual control sits at machine zero from the
+first iteration while the **true** nonlinear defect is 0.34, falling to 0.005
+only through iteration. Slack going to zero proves the linear model satisfied
+the dynamics it wrote down; only a measured defect proves those were the right
+dynamics.
+
+What virtual control is worth is diagnosis. On a problem with no solution it
+settles to a constant that measures the shortfall — 3.8737e-2, identical to five
+significant figures across four decades of penalty weight and moving 1.11x for a
+ten-fold tighter trust region. The Day 5/6 solvers returned `infeasible` and
+left you guessing.
+
+Against that ad-hoc loop on identical problems: 2–10% less propellant, with
+linearisation error tighter in five of six cases (2.0e-3 versus 6.6e-2 on the
+nominal). The old loop stopped after seven iterations on one case and one on
+another — false convergence, now caught.
 
 ### 3-DoF powered descent (Week 1)
 
@@ -338,6 +398,9 @@ src/
   integrators.py       Euler and RK4 steppers, fixed-step propagator
   constraints.py       glideslope, thrust bounds, pointing, mass dynamics
   landing_problem.py   constrained minimum-fuel landing (direct transcription)
+  scvx_params.py       tunable parameters for the SCvx iteration
+  scvx.py              SCvx: trust regions + virtual control (Day 7)
+  scvx_complete.py     trapz collocation + free final time + log-mass (Day 8)
   gnc/
     types.py           Param + Trajectory contracts shared by solver and viewer
     registry.py        problem plugin registry

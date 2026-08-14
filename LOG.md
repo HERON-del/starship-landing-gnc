@@ -439,6 +439,149 @@ _X hours_
 
 ---
 
+## Day 7 — 2026-08-14
+
+### Done
+- `src/scvx_params.py`, `src/scvx.py`: SCvx with virtual control on all seven
+  dynamics rows, an adaptive trust region, and a step quality measured against
+  forward-propagated true dynamics
+- `tests/test_scvx.py`: 7 groups, 30 checks, all passing
+- `src/scvx_experiments.py`: four sweeps, kept because three of the four
+  contradict what the guide predicts
+- `scvx-landing` added to the viewer (eight problems now)
+- `results/day7_scvx.png`, `day7_scvx_convergence.png`, `day7_scvx_sweeps.png`
+
+### Built differently from the guide, for a measured reason
+The guide's subproblem controls a free thrust vector `(Tx, Tz)` with
+`||T|| <= sigma`, plus an independent torque. That is the model Day 5 rejected,
+and transcribing it verbatim shows why: the thrust vector ends up a **mean of
+43° and a maximum of 115° off the body axis, at every one of 80 nodes**, against
+a 15° gimbal. It lands exactly on the pad at exactly zero speed by thrusting
+sideways relative to where it points.
+
+It also does not converge. With the guide's own trust-region logic, iteration 2
+returns `unbounded` from both CLARABEL and SCS and the radius collapses to its
+floor. Forced to keep iterating, virtual control grows monotonically from 54 to
+2,759,333 while the solver reports `optimal` every time. In SI the L1 penalty is
+adding metres to kilograms to radians, so no single weight can be right for all
+seven rows; scaled, one `eta` and one `w_vc` serve every row.
+
+### The finding that reshaped the day
+The guide says the decay of `||nu||` *is* the convergence proof. It is not.
+On the nominal problem `||nu||` is at machine zero from iteration 1 while the
+**true** nonlinear defect is 0.34, falling to 0.005 only through iteration — the
+linear model believes it is perfect ten orders of magnitude before it is. Slack
+going to zero proves the model satisfied the dynamics it wrote down; only a
+measured defect proves those were the right dynamics.
+
+What virtual control is actually worth is diagnosis. On an infeasible problem it
+settles to a constant that *measures* the shortfall: 3.8737e-2, identical to
+five significant figures across four decades of penalty weight, and moving 1.11x
+for a 10x tighter trust region. Day 5/6 returned `infeasible` and left you
+guessing.
+
+### Key insights
+- vs the Day 5/6 loop on identical problems: 2–10% less propellant, and
+  linearisation error tighter in 5 of 6 cases (2.0e-3 vs 6.6e-2 on the
+  nominal). The ad-hoc loop stopped after 7 iterations on one case and **1** on
+  another — false convergence, caught.
+- `eta_0` has no sweet spot. Every radius from 0.02 to 4.0 converges in 18–23
+  iterations to within 0.2% on fuel, because the adaptive rule re-tunes it.
+- `w_vc` has a **floor**, not a sweet spot. Pinned at 1, the solver reports a
+  635 kg landing — an 11x understatement bought by paying 5e-2 of slack
+  cheaply. At 10 and above, everything is identical across four decades.
+- Entry pitch decides feasibility once drag is on. Surviving slack: 1e-12 at
+  0° and 10°, ~1e-8 at 30°, 0.28–1.63 at 60°, scaling linearly with how much
+  drag is switched on.
+
+### Problems hit
+- Gated the aero continuation on the dynamics residual, which the aero case
+  never reaches, so the ramp stalled at step zero and silently solved the
+  aero-free problem. Re-gated on the thrust defect.
+- Grew `w_vc` every iteration, hitting 1e7 in nine steps and wrecking the
+  conditioning — both solvers then returned `unbounded` on a problem bounded
+  below by −1. Now it grows only when slack stops shrinking.
+- Priced the incumbent and the prediction at different `w_vc` when the weight
+  moved between iterations, corrupting rho. Now re-priced each iteration.
+
+### Time spent
+_X hours_
+
+---
+
+## Day 8 — 2026-08-14
+
+### Done
+- `src/scvx_complete.py`: trapezoidal collocation, free final time, log-mass
+- `tests/test_scvx_complete.py`: 8 groups, 39 checks, all passing
+- `src/scvx_complete_experiments.py`: four sweeps
+- `results/day8_complete.png`, `day8_convergence.png`, `day8_comparison.png`,
+  `day8_sweeps.png`
+
+### The guide's free final time is a no-op
+It declares `t_f` a decision variable, bounds it, gives it a trust region and a
+`0.1 * t_f` objective term — but computes `dt` from the *reference* `t_f`, so
+the variable never enters a single dynamics constraint. Nothing resists the
+penalty, so `t_f` is driven to `t_f_min` every iteration and the reference
+follows it down. It is a constant dressed as an optimisation.
+
+Making it real means confronting the term the guide avoided. Writing `kt` for
+`t_f / t_nom`, every dynamics row carries `kt * f(x, u)` — a product of two
+decision quantities. Linearised about the reference, `kt*f ~ kt_r*f + f_r*(kt -
+kt_r)`, it is affine in both and exact at the reference, which is the standard
+free-final-time treatment. `t_f` then searches 6.0 → 7.5 → 6.8 → 7.55 → 7.76 s
+instead of sliding to a bound.
+
+### Key insights
+- **Trapezoidal collocation is the day's real result.** Replaying the commanded
+  control through the verified nonlinear simulator, with the burn duration
+  pinned so discretisation is the only difference: **0.502 m versus Euler's
+  3.575 m** on a 473 m descent. Day 5's suite predicted a ~7x improvement and
+  left it as the outstanding action; measured, 7.1x.
+- Trapezoidal at **N=20** (0.499 m) beats Euler at **N=120** (2.308 m). The
+  higher-order rule buys back roughly 6x the node count. Trapz error is then
+  flat in N — it has hit the zero-order-hold control floor, not an integration
+  floor.
+- The fuel figure decomposes, and the decomposition matters more than the
+  headline. At a pinned 8 s, trapz costs 7,246 kg against Euler's 7,209: Euler
+  was **understating by 37 kg** because its dynamics were wrong. Free time then
+  saves 132 kg against that corrected number, for a net 95 kg (1.3%) under
+  Day 7. Reporting only "saved 95 kg" would hide an error and a saving that
+  partly cancel.
+- Log-mass makes the objective linear — minimising propellant is exactly
+  maximising `zm[N]` — and `m_wet exp(zm)` matches the mass it represents to
+  0.00 kg. It also un-freezes mass in the velocity rows, which Day 7 had held
+  fixed from the reference within each iteration.
+- The time penalty is unnecessary. With `w_time = 0` the optimum is 7.761 s and
+  nothing is degenerate: the throttle floor already makes a longer burn cost
+  propellant. Across `w_time` from 0 to 1 the answer moves 0.7%.
+- Guess-independence, tested properly: sweeping `t_burn_guess` is meaningless
+  here because the entry state is *sized from the guess*, so each guess is a
+  different problem. With the entry state pinned, converged durations span
+  **0.574 s across guesses from 5 to 12 s**.
+
+### Problems hit
+- Selected the cheapest honest iterate rather than the converged one, which
+  bought 20 kg of linearisation error and called it a saving. The converged
+  iterate is the answer.
+- The comparison plot labelled a 1.3% saving as `+1.3%`, and plotted an 11%
+  linearisation difference instead of the 4.5x replay result that matters.
+
+### Honest limitation
+Three of seven extreme cases and the longer-guess runs still leave residual
+slack. Each is the aerodynamic deficit already measured on Day 7 at that entry
+pitch and burn time — inherited, not introduced. Free time does not rescue an
+infeasible problem; it reports the same shortfall at a slightly better duration.
+
+### Tomorrow (Day 9)
+- Monte Carlo: dispersed initial conditions, mass and aero uncertainty
+- Where the solver breaks, and how much margin actually exists
+
+### Time spent
+_X hours_
+
+---
+
 ## Day 3 — 2026-08-10
 
 ### Done
