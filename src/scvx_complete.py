@@ -211,6 +211,8 @@ def solve_scvx_complete(
     omega0: float = 0.0,
     gamma_gs_deg: float = 75.0,
     w_time: float = 0.0,
+    m0: float = None,
+    initial_ref: dict = None,
     verbose: bool = True,
 ):
     """
@@ -238,6 +240,11 @@ def solve_scvx_complete(
     t_f_min = 0.5 * t_nom if t_f_min is None else float(t_f_min)
     t_f_max = 2.0 * t_nom if t_f_max is None else float(t_f_max)
     t_start = timer.time()
+
+    # Log-mass at the start of *this* solve. Zero for a fresh trajectory, and
+    # negative for a replan that begins with propellant already spent.
+    m0 = vehicle.m_wet if m0 is None else float(m0)
+    zm0 = float(np.log(max(m0, vehicle.m_dry) / vehicle.m_wet))
 
     if z0 is None or vz0 is None:
         t_flip = float(np.clip(1.4 * theta0 / vehicle.omega_max, 1.5,
@@ -342,7 +349,9 @@ def solve_scvx_complete(
         x[0] == x0 / sc.L, z[0] == z0 / sc.L,
         vx[0] == vx0 / sc.V, vz[0] == vz0 / sc.V,
         th[0] == theta0, w[0] == omega0 / sc.W,
-        zm[0] == 0.0,
+        # Not always zero: replanning mid-burn starts from whatever propellant
+        # is actually left, which is the point of a guidance loop.
+        zm[0] == zm0,
         x[N] == 0.0, z[N] == 0.0,
         vx[N] == 0.0, vz[N] == 0.0,
         th[N] == 0.0, w[N] == 0.0,
@@ -410,8 +419,13 @@ def solve_scvx_complete(
     # ------------------------------------------------------------------
     # Iteration
     # ------------------------------------------------------------------
-    ref = initialize_reference(N, t_nom, x0, z0, vx0, vz0, theta0, omega0,
-                               vehicle, seed=params.seed)
+    # A warm reference, when one is supplied, replaces the cold seed entirely.
+    # This is what makes closed-loop replanning affordable: the previous
+    # solution shifted forward is already close to the answer, so the iteration
+    # starts near its own fixed point instead of at a straight-line guess.
+    ref = (dict(initial_ref) if initial_ref is not None
+           else initialize_reference(N, t_nom, x0, z0, vx0, vz0, theta0,
+                                     omega0, vehicle, seed=params.seed))
     eta = params.eta_0
     eta_u = params.eta_u_0
     eta_kt = 0.25
@@ -643,7 +657,10 @@ def solve_scvx_complete(
         rho = (1.0 if actual >= -1e-12 else 0.0) if abs(predicted) < 1e-12 \
             else actual / predicted
 
-        fuel = float(vehicle.m_wet - sol["m"][-1])
+        # Propellant burned by *this* solve, so a mid-flight replan reports
+        # what the rest of the descent costs rather than what the whole
+        # descent would have cost from a full tank.
+        fuel = float(m0 - sol["m"][-1])
         accept = rho > params.rho_ok
 
         history["fuel"].append(fuel)

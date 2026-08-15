@@ -692,6 +692,116 @@ _X hours_
 
 ---
 
+## Day 10 — 2026-08-15
+
+### Done
+- `src/warm_start.py`: `shift_reference` turns the previous solution into the
+  next solve's reference
+- `src/scvx_complete.py`: two hooks a guidance loop needs — `initial_ref` to
+  inject a warm reference, and `m0` so a replan can start mid-burn rather than
+  from a full tank
+- `src/closed_loop.py`: MPC loop, OU gust field, open-loop baseline on
+  identical gusts
+- `tests/test_closed_loop.py`: 7 groups
+- `src/closed_loop_experiments.py`: four sweeps
+
+### Warm starting does not do what the guide says
+The guide measures the speedup by capping warm solves at four iterations and
+comparing against an uncapped cold solve, so a speedup of at least the cap is
+guaranteed whether or not warm starting does anything. Run both to the same
+tolerance and the effect is absent: at three replan points warm took 16, 28 and
+26 iterations against cold's 20, 21 and 23. Tightening the trust region to
+"exploit" the good reference made it worse, because the solver then cannot move
+far enough per iteration to absorb the tracking error.
+
+The reason is structural. This solver's iteration count is set by the
+trust-region schedule annealing down from `eta_0` and by the convergence test,
+not by how far the reference sits from the answer. A better starting point does
+not shorten a schedule that does not know about it.
+
+What warm starting *does* buy is the thing a guidance loop needs: a usable
+command inside a fixed budget. From a 3 m tracking gap given one iteration, the
+warm solve commands a gimbal 5.9 degrees from the converged answer and the cold
+solve 24.1 degrees — saturated the wrong way. Given three, warm is 0.30 degrees
+off and cold is still 5.9. Commanded thrust is identical either way; it is the
+steering that is wrong when cold. So the loop runs a 3-iteration budget per
+cycle, which costs about 0.25 s against a 0.5 s cycle.
+
+### The result, and it is not the one the guide expects
+Twelve wind seeds, closed and open loop flying identical gusts:
+
+| | landed | miss (median) | arrival (median) |
+|---|---|---|---|
+| open loop | 33% | 3.45 m | 5.76 m/s |
+| closed loop | **8%** | **0.60 m** | **15.31 m/s** |
+
+The closed loop lands nearer in 11 of 12 seeds and arrives slower in 1 of 12.
+It fixes position — decisively, 5.7x on the median, and the advantage widens
+with wind, 5.24 m against 1.02 m at the strongest gusts — and it makes arrival
+speed nearly three times worse. By Day 9's own scoring it is a regression:
+33% good landings down to 8%.
+
+That is worth stating plainly rather than dressing up. **Day 9 established that
+position was never the failure and arrival speed was. The loop as built
+improves the error that did not matter and worsens the one that did.**
+
+### Why, and it is a rate problem rather than a concept problem
+The guidance-rate sweep is the diagnosis. Shrinking the cycle improves both
+numbers monotonically:
+
+| cycle | miss (median) | arrival (median) | replan cost |
+|---|---|---|---|
+| 1.000 s | 1.13 m | 21.63 m/s | 0.211 s |
+| 0.500 s | 0.62 m | 15.31 m/s | 0.242 s |
+| 0.250 s | 0.44 m | 12.21 m/s | 0.208 s |
+| 0.125 s | 0.06 m | **7.85 m/s** | 0.220 s — does not fit |
+
+So the loop is converging toward the right answer as it is sampled faster; it
+is simply under-sampled where it matters. The descent lasts about 5 s and
+essentially all the braking is in the last second, so a 0.5 s cycle leaves the
+final command up to half a second stale exactly when precision is needed.
+Position is a slow state and gets corrected; velocity is fast, and on a
+bang-bang trajectory with no slack it does not. At 0.125 s the arrival is
+7.85 m/s and still falling — but the replan costs 0.22 s, so that rate is not
+real-time on this solver.
+
+### Problems hit
+- Held the plan's first control constant across each 0.5 s cycle. The plan's
+  own control interval is 0.13 s, so this mis-steered the attitude badly:
+  within two cycles the replan went infeasible while position still matched the
+  plan to 0.3 m. The gap metric hid it by measuring position only. Fixed by
+  following the current plan's control schedule between replans, which is the
+  ordinary guidance/control split.
+- Shifted a freshly computed plan forward by a full cycle before its first use,
+  producing a 62 m phantom tracking gap on the first replan. The plan's clock
+  starts at the state it was solved from; its age is zero until time is flown.
+- Guessed that the loop was deferring its braking, since each replan
+  re-optimises minimum fuel and the cheapest plan always brakes as late as
+  possible. Measured it: `t + t_f` holds at 5.13–5.27 s across every cycle, so
+  it is not postponing, and capping the duration changed nothing. The
+  hypothesis was wrong and the rate sweep found the real cause.
+
+### Honest limitation
+Navigation noise breaks this loop. Feeding raw noisy estimates into a
+re-optimisation that is bang-bang by construction amplifies them: 1 m of
+position noise is harmless, 3 m produces a 109 m worst-case miss, and 8 m gives
+an 84 m median miss and 10,056 kg of propellant against a nominal 6,009 kg.
+There is no filter between the estimate and the solver, and there needs to be
+one before this is flyable.
+
+### Next
+- A terminal-phase controller, or a much higher rate over the last second,
+  since that is where the sweep says the remaining error lives
+- A state estimator, so navigation noise stops being fed straight into a
+  bang-bang re-plan
+- Re-run Day 9's 250-sample dispersion sweep closed-loop once those land; the
+  number to beat is still 29.6% good landings
+
+### Time spent
+_X hours_
+
+---
+
 ## Day 3 — 2026-08-10
 
 ### Done

@@ -94,6 +94,7 @@ published results in the trajectory-optimization literature.
 | Day 7 | SCvx: trust regions, virtual control, measured convergence | done |
 | Day 8 | Trapezoidal collocation, free final time, log-mass | done |
 | Day 9 | Monte Carlo dispersion analysis, flown open-loop | done |
+| Day 10 | Closed-loop guidance: warm-started replanning | done |
 | Week 1 | 3-DoF convex powered descent, glideslope + tilt cones | done |
 | Week 2 | Sequential Convex Programming (SCvx) solver | done |
 | Week 3 | 6-DoF rigid-body dynamics with quaternions | |
@@ -104,6 +105,42 @@ published results in the trajectory-optimization literature.
 ---
 
 ## Results so far
+
+### Closing the loop, and what it does not fix (Day 10)
+
+The Day 8 solver stops being something you run once and becomes a subroutine
+called every half second from wherever the vehicle actually is, warm-started
+from the previous answer.
+
+![Closed loop vs open loop](results/day10_closed_loop.png)
+
+Twelve wind seeds, both strategies flying identical gusts:
+
+| | landed | miss (median) | arrival (median) |
+|---|---|---|---|
+| open loop | 33% | 3.45 m | 5.76 m/s |
+| closed loop | **8%** | **0.60 m** | **15.31 m/s** |
+
+The closed loop lands nearer in 11 of 12 seeds — 5.7× better on the median, and
+the advantage widens with wind — and arrives nearly three times faster. By
+Day 9's scoring that is a regression, and it is worth saying so plainly:
+**Day 9 established that position was never the failure and arrival speed was.
+This loop improves the error that did not matter and worsens the one that did.**
+
+The guidance-rate sweep says it is a rate problem rather than a concept problem.
+Shrinking the cycle improves both numbers monotonically — 21.6, 15.3, 12.2 and
+7.85 m/s at cycles of 1.0, 0.5, 0.25 and 0.125 s — but the replan costs 0.22 s,
+so the rate that would fix it is not real-time on this solver. The descent
+lasts about 5 s and nearly all the braking is in the last second, so a 0.5 s
+cycle leaves the final command half a second stale exactly where precision is
+needed.
+
+Warm starting also does not do what it is usually claimed to. Run to the same
+tolerance it gives no iteration speedup here at all, because this solver's
+iteration count is set by its trust-region schedule rather than by where the
+reference starts. What it does buy is a usable command inside a fixed budget:
+given one iteration from a 3 m tracking gap, the warm solve is 5.9° from the
+converged gimbal and the cold solve is 24.1° off, saturated the wrong way.
 
 ### Monte Carlo: what open-loop actually buys (Day 9)
 
@@ -449,6 +486,8 @@ src/
   scvx.py              SCvx: trust regions + virtual control (Day 7)
   scvx_complete.py     trapz collocation + free final time + log-mass (Day 8)
   monte_carlo.py       dispersion analysis, flown through the truth model (Day 9)
+  warm_start.py        previous solution -> next solve's reference (Day 10)
+  closed_loop.py       MPC guidance loop and open-loop baseline (Day 10)
   gnc/
     types.py           Param + Trajectory contracts shared by solver and viewer
     registry.py        problem plugin registry
