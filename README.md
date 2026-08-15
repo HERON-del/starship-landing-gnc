@@ -32,12 +32,15 @@ glance. The translucent cone is the glideslope corridor.
 | **Export** | full run as JSON — parameters plus trajectory |
 | **Re-solve** | `r`, or automatically on any control change |
 
-Nine problems are registered — one per day of work, plus the Week 1 3-DoF
+Ten problems are registered — one per day of work, plus the Week 1 3-DoF
 optimiser. The Day 7 entry is the first that will render a problem with *no*
 solution: virtual control lets it return the least-infeasible trajectory
 alongside a measurement of the shortfall, where every earlier entry could only
 report the word `infeasible`. The Day 8 entry hands the burn duration to the
-solver and reports back what it chose against what you guessed.
+solver and reports back what it chose against what you guessed. The Day 9 entry
+is the only one that does not draw a plan at all — it runs a small dispersed
+fleet and renders one of them *flown* open-loop through the true vehicle, so
+what you see is what the rocket did rather than what the optimiser intended.
 
 The Day 5 entry is the first whose attitude the optimiser actually
 solves for rather than infers from the thrust vector, so the vehicle in the

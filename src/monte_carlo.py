@@ -227,7 +227,8 @@ def dynamics_in_wind(t, state, control_fn, vehicle, aero, wind):
     ])
 
 
-def fly_the_plan(plan, truth_vehicle, truth_aero, wind, steps=4000):
+def fly_the_plan(plan, truth_vehicle, truth_aero, wind, steps=4000,
+                 return_path=False):
     """
     Fly the commanded throttle and gimbal open-loop through the true vehicle.
 
@@ -242,6 +243,11 @@ def fly_the_plan(plan, truth_vehicle, truth_aero, wind, steps=4000):
     interpolated to the crossing and the miss is horizontal, and if it does not,
     the miss is the straight-line distance from the pad at `t_f` and the
     residual altitude is reported alongside it.
+
+    With `return_path`, the flown state history is returned too, truncated at
+    the ground crossing where there is one. The viewer needs it to draw the
+    trajectory the vehicle actually flew rather than the one that was planned,
+    which is the entire point of the day.
     """
     sigma, delta = plan["sigma"], plan["delta"]
     t_f = float(plan["t_f"])
@@ -268,7 +274,7 @@ def fly_the_plan(plan, truth_vehicle, truth_aero, wind, steps=4000):
             dz = prev[1] - cur[1]
             frac = prev[1] / dz if abs(dz) > 1e-12 else 0.0
             s = prev + frac * (cur - prev)
-        return {
+        out = {
             "touched_down": True,
             "miss": float(abs(s[0])),
             "speed": float(np.hypot(s[2], s[3])),
@@ -277,9 +283,13 @@ def fly_the_plan(plan, truth_vehicle, truth_aero, wind, steps=4000):
             "mass": float(s[6]),
             "t_end": float(t_hist[max(i - 1, 0)] + frac * (t_f / steps)),
         }
+        if return_path:
+            out["t_path"] = np.append(t_hist[:i], out["t_end"])
+            out["y_path"] = np.vstack([y[:i], s])
+        return out
 
     end = y[-1]
-    return {
+    out = {
         "touched_down": False,
         "miss": float(np.hypot(end[0], end[1])),
         "speed": float(np.hypot(end[2], end[3])),
@@ -288,13 +298,17 @@ def fly_the_plan(plan, truth_vehicle, truth_aero, wind, steps=4000):
         "mass": float(end[6]),
         "t_end": float(t_hist[-1]),
     }
+    if return_path:
+        out["t_path"] = t_hist
+        out["y_path"] = y
+    return out
 
 
 # ======================================================================
 # One dispersed case
 # ======================================================================
 def run_single(sample: dict, N: int = 60, disp: DispersionConfig = None,
-               max_iter: int = 25) -> dict:
+               max_iter: int = 25, keep_path: bool = False) -> dict:
     """
     Plan with the nominal vehicle in calm air, then fly the true one.
 
@@ -341,7 +355,8 @@ def run_single(sample: dict, N: int = 60, disp: DispersionConfig = None,
     truth_aero.Cd_nose *= sample["Cd_scale"]
 
     flown = fly_the_plan(plan, truth_vehicle, truth_aero,
-                         (sample["wind_x"], sample["wind_z"]))
+                         (sample["wind_x"], sample["wind_z"]),
+                         return_path=keep_path)
 
     fuel = truth_vehicle.m_wet - flown["mass"]
     margin = flown["mass"] - truth_vehicle.m_dry
@@ -373,6 +388,12 @@ def run_single(sample: dict, N: int = 60, disp: DispersionConfig = None,
         "planned_miss": float(np.hypot(plan["x"][-1], plan["z"][-1])),
         "elapsed": timer.time() - t0,
         "sample": sample,
+        # Only when asked: the viewer draws the flown path against the plan,
+        # and carrying these for every run of a 250-sample sweep would hold
+        # the whole fleet's trajectories in memory for no reason.
+        **({"plan": plan,
+            "t_path": flown["t_path"],
+            "y_path": flown["y_path"]} if keep_path else {}),
     }
 
 
