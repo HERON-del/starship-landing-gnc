@@ -582,6 +582,116 @@ _X hours_
 
 ---
 
+## Day 9 — 2026-08-14
+
+### Done
+- `src/monte_carlo.py`: dispersion engine, splitting what the planner is told
+  from the model error it is not
+- `tests/test_monte_carlo.py`: 7 groups, 24 checks
+- `src/monte_carlo_experiments.py`: four sweeps
+- 250 dispersed runs; `results/day9_monte_carlo.png`, `day9_failures.png`,
+  `day9_dispersion.png`, `day9_sweeps.png`, `day9_stats.json`
+
+### Two things in the guide had to be fixed before anything could run
+Its `run_single` cannot execute against this codebase at all: it assigns to
+`vehicle.m_wet`, `vehicle.T_max` and `vehicle.T_min`, which are read-only
+properties here, and raises `AttributeError` on the first one.
+
+The larger problem is what it measures. Landing accuracy is read off `x_f, z_f`
+in the solver's own solution — but those are hard equality constraints, so the
+number is between 5e-10 and 1e-7 m on every dispersed run and a CEP built from
+it is zero by construction. The guide's own expected output quotes a CEP of
+2.05 m, which is only reachable if the terminal conditions are soft. Measuring
+the optimiser against its own constraint reports that the constraint was
+enforced, not that the vehicle landed.
+
+So accuracy here comes from flying the plan open-loop through the independently
+verified nonlinear simulator with the dispersions actually applied. That splits
+the perturbations in two: the **entry state** is navigation error and the solver
+is told it, while **mass, Isp, drag and wind** are model error it is never told.
+Wind in particular has to enter the truth model rather than the initial
+condition — the guide shifts `vx0` and `vz0` and then hands the shifted state to
+the planner, which makes the wind something the planner knows about.
+
+### The centre had to move too
+`feasible_entry_state` sizes an entry the burn can *just* null, so what it
+returns is a point on the feasibility boundary by construction. Sweeping one
+axis at a time about its (473 m, −118.3 m/s, 30°) answer: converges at 473 m and
+fails at 500, converges at −118.3 m/s and fails at −112, converges at 30° and
+fails at 35. Every axis one-sided. A Monte Carlo centred there returned a 33%
+success rate — a fact about where it was centred. Recentred at (420 m,
+−130 m/s, 25°), which holds at ±80 m, ±20 m/s and ±8°, the solve rate is 98.4%.
+
+### Key results, 250 runs
+- Solver converged on **98.4%**. The optimiser is not the weak link.
+- Flown miss: **CEP 3.74 m**, p95 10.33 m, max 13.56 m — against a solver-
+  reported terminal error that never exceeded 4.82e-08 m. Four orders of
+  magnitude between what it promised and what it delivered.
+- Propellant margin is a non-issue: 23,678 kg mean, 21,988 kg worst, and not one
+  run finished below dry mass. The vehicle has ~22 t of authority it never uses.
+- Only **29.6%** landed within 5 m and 5 m/s. The dominant failure is arrival
+  speed, not position or fuel: 34.4% arrived too fast, 21.6% missed the pad,
+  12.8% both.
+
+### The finding: minimum-fuel plans are knife-edges
+Arrival speed came out bimodal — a spike near zero and a second cluster at
+15–22 m/s — and the ground-crossing flag separates them almost exactly (125 of
+246 crossed). One plan flown against a swept true propellant load shows why,
+with nothing random involved:
+
+| true propellant | outcome | speed |
+|---|---|---|
+| −1,500 kg | stops 4.39 m up | 2.08 m/s |
+| nominal | stops 0.10 m up | 0.03 m/s |
+| **+200 kg** | reaches the pad | **6.54 m/s** |
+| +1,500 kg | reaches the pad | 19.35 m/s |
+
+A 200 kg error, 0.67% of the load, takes touchdown from 0.03 to 6.54 m/s. Drag
+error does the same with the opposite sign: `Cd` at 0.85 arrives at 25.96 m/s,
+at 1.15 it stops 7.29 m short. A minimum-fuel trajectory is bang-bang and brings
+the vehicle to rest exactly at the pad with no slack anywhere, so any error in
+net deceleration puts it on one side or the other and nothing open-loop restores
+it. Position stays good throughout — under 7.3 m across the whole sweep. It is
+the velocity at contact that is uncontrolled.
+
+That is the argument for Day 10 stated quantitatively: the propellant to fix
+this is already aboard, and open-loop is why it goes unspent.
+
+### The sweeps say which error matters
+- **Navigation error contributes essentially nothing.** Scaling the entry
+  dispersion from full 3σ down to *zero*, with the model errors held at full
+  strength, moves CEP from 2.76 m to 2.98 m. The solver absorbs being told it is
+  somewhere unexpected; what it cannot absorb is being wrong about the vehicle.
+- **Wind is the position-error driver.** CEP runs 0.84 m with no wind, 3.10 m at
+  10 m/s, 9.12 m at 30 m/s — very nearly linear. Mass and drag barely move the
+  miss; as the knife-edge sweep shows, they go into arrival *speed* instead.
+  Position error and speed error have different causes.
+- **The altitude band is narrow and one-sided**, entry speed held at −130 m/s:
+  solve rate is 100% from 360–420 m, 91.7% at 480, 83.3% at 540 and 33.3% at
+  600, with good landings falling 41.7% → 0%. That is the vertical slice through
+  the feasibility wedge — a slow, high approach over-brakes before it arrives,
+  because the throttle floor will not let the engines ease off.
+- **Node count is nearly irrelevant to the statistics.** CEP sits between 3.07
+  and 3.73 m across N = 30 to 80, at 2.8–3.5 s per run. Trapezoidal collocation
+  is why: Day 8 measured its replay error as flat in N past about 20 nodes.
+
+### Problems hit
+- Scored landings on a ground-crossing test, which nominally never fires: the
+  plan ends at `z = 0` and the RK4 replay of it bottoms out at `z = +0.097 m`.
+  Every run was recorded as failing to land. Day 8's 0.502 m replay figure was
+  almost all downrange — 0.486 m of it — so the miss is the distance from the
+  pad at the end of the flown plan, with the ground crossing handled when it
+  does occur.
+
+### Tomorrow (Day 10)
+- Closed-loop guidance: replan on a receding horizon and re-run this same sweep
+- The number to beat is 29.6% landed and an 8.49 m/s mean arrival
+
+### Time spent
+_X hours_
+
+---
+
 ## Day 3 — 2026-08-10
 
 ### Done

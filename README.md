@@ -90,6 +90,7 @@ published results in the trajectory-optimization literature.
 | Day 6 | Aerodynamics: the belly-flop, and a two-phase entry | done |
 | Day 7 | SCvx: trust regions, virtual control, measured convergence | done |
 | Day 8 | Trapezoidal collocation, free final time, log-mass | done |
+| Day 9 | Monte Carlo dispersion analysis, flown open-loop | done |
 | Week 1 | 3-DoF convex powered descent, glideslope + tilt cones | done |
 | Week 2 | Sequential Convex Programming (SCvx) solver | done |
 | Week 3 | 6-DoF rigid-body dynamics with quaternions | |
@@ -100,6 +101,43 @@ published results in the trajectory-optimization literature.
 ---
 
 ## Results so far
+
+### Monte Carlo: what open-loop actually buys (Day 9)
+
+250 dispersed landings — navigation error on the entry state, and mass, Isp,
+drag and wind errors the planner is never told about.
+
+![Monte Carlo results](results/day9_monte_carlo.png)
+
+The solver is not the weak link: it converges on **98.4%** of samples and the
+vehicle has ~22 tonnes of propellant margin it never spends. But only **29.6%**
+land within 5 m and 5 m/s, and the dominant failure is arrival speed rather than
+position or fuel.
+
+Accuracy here is measured by flying the plan open-loop through the independently
+verified nonlinear simulator, not by reading the solver's own terminal state.
+That distinction is the whole analysis: `x[N] == 0` is a hard equality
+constraint, so the solver's self-reported error never exceeds 4.8e-08 m, while
+the flown CEP is **3.74 m**. Four orders of magnitude separate what it promised
+from what it delivered.
+
+The reason is that a minimum-fuel trajectory is a knife-edge. It is bang-bang,
+and it brings the vehicle to rest exactly at the pad with no slack anywhere, so
+any error in net deceleration puts it on one side or the other. One plan, flown
+against a swept true propellant load:
+
+| true propellant | outcome | speed |
+|---|---|---|
+| −1,500 kg | stops 4.39 m up | 2.08 m/s |
+| nominal | stops 0.10 m up | 0.03 m/s |
+| **+200 kg** | reaches the pad | **6.54 m/s** |
+| +1,500 kg | reaches the pad | 19.35 m/s |
+
+A 200 kg error — 0.67% of the load — takes touchdown from 0.03 to 6.54 m/s.
+Position stays under 7.3 m throughout; it is the velocity at contact that is
+uncontrolled, and nothing open-loop restores it.
+
+![Failure modes](results/day9_failures.png)
 
 ### The complete solver (Day 8)
 
@@ -407,6 +445,7 @@ src/
   scvx_params.py       tunable parameters for the SCvx iteration
   scvx.py              SCvx: trust regions + virtual control (Day 7)
   scvx_complete.py     trapz collocation + free final time + log-mass (Day 8)
+  monte_carlo.py       dispersion analysis, flown through the truth model (Day 9)
   gnc/
     types.py           Param + Trajectory contracts shared by solver and viewer
     registry.py        problem plugin registry
