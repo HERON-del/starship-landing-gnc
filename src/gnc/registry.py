@@ -107,8 +107,21 @@ def load_all() -> None:
         importlib.import_module(f"{problems.__name__}.{mod.name}")
 
 
+def _phase_key(phase: str) -> tuple:
+    """
+    Sort `Day 10` after `Day 9` rather than between `Day 1` and `Day 2`.
+
+    Sorting the phase as a plain string puts it in dictionary order, which is
+    fine up to nine problems and wrong from the tenth on. Split the trailing
+    number out and sort on it.
+    """
+    head, _, tail = phase.rpartition(" ")
+    return (head or phase, int(tail)) if tail.isdigit() else (phase, 0)
+
+
 def all_problems() -> list[Problem]:
-    return sorted(_REGISTRY.values(), key=lambda p: (p.phase, p.title))
+    return sorted(_REGISTRY.values(),
+                  key=lambda p: (_phase_key(p.phase), p.title))
 
 
 def get(slug: str) -> Problem:

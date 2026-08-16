@@ -32,8 +32,11 @@ glance. The translucent cone is the glideslope corridor.
 | **Export** | full run as JSON — parameters plus trajectory |
 | **Re-solve** | `r`, or automatically on any control change |
 
-Ten problems are registered — one per day of work, plus the Week 1 3-DoF
-optimiser. The Day 7 entry is the first that will render a problem with *no*
+Eleven problems are registered — one per day of work, plus the Week 1 3-DoF
+optimiser. The Day 10 entry flies the same descent twice, closed-loop and
+open-loop, on an identical gust sequence, and lets you switch between them —
+which is the clearest way to see that replanning fixes position and costs
+arrival speed. The Day 7 entry is the first that will render a problem with *no*
 solution: virtual control lets it return the least-infeasible trajectory
 alongside a measurement of the shortfall, where every earlier entry could only
 report the word `infeasible`. The Day 8 entry hands the burn duration to the

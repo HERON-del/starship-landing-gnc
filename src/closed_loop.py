@@ -193,7 +193,7 @@ def run_closed_loop(
     omega0=0.0, gamma_gs_deg=75.0,
     wind=None, wind_sigma_x=6.0, wind_sigma_z=2.0, wind_tau=2.0, wind_seed=0,
     nav_sigma_pos=0.0, nav_sigma_vel=0.0, nav_seed=None,
-    max_steps=200, verbose=True,
+    max_steps=200, keep_path=False, verbose=True,
 ):
     """
     Replan every `guidance_dt` seconds, warm-started, and fly the result.
@@ -229,6 +229,9 @@ def run_closed_loop(
            "m": [truth[6]]}
     replan = {"t": [], "iterations": [], "solve_time": [], "gap": [],
               "warm": [], "t_f": [], "wind_x": []}
+    # The truth log is one sample per guidance cycle, which is far too coarse
+    # to draw. When asked, keep the integrator's own sub-steps as well.
+    fine_t, fine_y = ([0.0], [truth.copy()]) if keep_path else (None, None)
 
     t_sim, final, n_replans = 0.0, None, 0
     sigma_cmd = float(plan["sigma"][0])
@@ -287,6 +290,10 @@ def run_closed_loop(
                   f"{'yes' if used_warm else 'no':>5}")
 
         y = _fly(truth, plan, age, guidance_dt, vehicle, aero, (wx, wz))
+        if keep_path:
+            sub = np.linspace(t_sim, t_sim + guidance_dt, len(y))
+            fine_t.extend(sub[1:].tolist())
+            fine_y.extend(list(y[1:]))
         hit = _ground_crossing(y)
         if hit is not None:
             final = hit
@@ -319,6 +326,13 @@ def run_closed_loop(
         else float("nan"),
         "guidance_dt": guidance_dt, "budget": budget,
     })
+    if keep_path:
+        y_arr = np.asarray(fine_y)
+        # Trim anything the integrator carried below the pad on the last cycle.
+        above = np.flatnonzero(y_arr[:, 1] >= 0.0)
+        cut = int(above[-1]) + 1 if above.size else len(y_arr)
+        out["path_t"] = np.asarray(fine_t)[:cut]
+        out["path_y"] = y_arr[:cut]
     if verbose:
         print(f"\n  {out['fail_reason']}: {out['miss']:.2f} m at "
               f"{out['speed']:.2f} m/s, {out['fuel']:,.0f} kg burned, "
@@ -332,7 +346,7 @@ def run_open_loop(
     x0=0.0, z0=Z0_NOM, vx0=0.0, vz0=VZ0_NOM, theta0_deg=THETA0_NOM,
     omega0=0.0, gamma_gs_deg=75.0,
     wind=None, wind_sigma_x=6.0, wind_sigma_z=2.0, wind_tau=2.0, wind_seed=0,
-    max_steps=200, verbose=True, **_,
+    max_steps=200, keep_path=False, verbose=True, **_,
 ):
     """
     Day 9's strategy under the same gusts: plan once, fly it, never look again.
@@ -361,12 +375,17 @@ def run_open_loop(
            "m": [truth[6]]}
 
     t_sim, final = 0.0, None
+    fine_t, fine_y = ([0.0], [truth.copy()]) if keep_path else (None, None)
     for _ in range(max_steps):
         if t_sim >= t_f - 1e-9:
             break
         dt = min(guidance_dt, t_f - t_sim)
         wx, wz = gusts.step(dt)
         y = _fly(truth, plan, t_sim, dt, vehicle, aero, (wx, wz))
+        if keep_path:
+            sub = np.linspace(t_sim, t_sim + dt, len(y))
+            fine_t.extend(sub[1:].tolist())
+            fine_y.extend(list(y[1:]))
         hit = _ground_crossing(y)
         if hit is not None:
             final = hit
@@ -386,6 +405,12 @@ def run_open_loop(
     out = _outcome(final, vehicle, m_start)
     out.update({"status": "flown", "truth": log, "sim_time": t_sim,
                 "plan": plan, "n_replans": 0})
+    if keep_path:
+        y_arr = np.asarray(fine_y)
+        above = np.flatnonzero(y_arr[:, 1] >= 0.0)
+        cut = int(above[-1]) + 1 if above.size else len(y_arr)
+        out["path_t"] = np.asarray(fine_t)[:cut]
+        out["path_y"] = y_arr[:cut]
     if verbose:
         print(f"  open loop: {out['fail_reason']}: {out['miss']:.2f} m at "
               f"{out['speed']:.2f} m/s, {out['fuel']:,.0f} kg burned")
