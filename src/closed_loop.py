@@ -289,6 +289,12 @@ def run_closed_loop(
                   f"{n_iters:>3} {solve_time:>6.3f}s "
                   f"{'yes' if used_warm else 'no':>5}")
 
+        # Once the plan's horizon is spent there is no guidance left, and
+        # `_fly` clamps to its last control -- a lit engine, for a landing
+        # plan. Left running, the vehicle climbs away from the pad still
+        # thrusting. Day 12 hit this: one run reversed at 4.8 m and tumbled
+        # back up to 174 m. Stop when the plan is spent, as run_open_loop does.
+        plan_spent = age + guidance_dt >= float(plan["t_f"]) - 1e-9
         y = _fly(truth, plan, age, guidance_dt, vehicle, aero, (wx, wz))
         if keep_path:
             sub = np.linspace(t_sim, t_sim + guidance_dt, len(y))
@@ -306,6 +312,9 @@ def run_closed_loop(
         for k, v in zip(("t", "x", "z", "vx", "vz", "theta", "omega", "m"),
                         (t_sim, *truth)):
             log[k].append(v)
+        if plan_spent and ref is None:
+            final = truth
+            break
 
     if final is None:
         final = truth

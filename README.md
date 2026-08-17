@@ -103,6 +103,7 @@ published results in the trajectory-optimization literature.
 | Day 9 | Monte Carlo dispersion analysis, flown open-loop | done |
 | Day 10 | Closed-loop guidance: warm-started replanning | done |
 | Day 11 | Navigation: sensors and an Extended Kalman Filter | done |
+| Day 12 | IMU bias estimation by state augmentation | done |
 | Week 1 | 3-DoF convex powered descent, glideslope + tilt cones | done |
 | Week 2 | Sequential Convex Programming (SCvx) solver | done |
 | Week 3 | 6-DoF rigid-body dynamics with quaternions | |
@@ -113,6 +114,32 @@ published results in the trajectory-optimization literature.
 ---
 
 ## Results so far
+
+### IMU bias: estimating the sensor's own error (Day 12)
+
+Day 11 measured what an unestimated gyro bias costs and left it unaddressed.
+This adds the bias as a seventh state, so the filter estimates the instrument's
+error alongside the vehicle's motion.
+
+![Bias estimation](results/day12_bias.png)
+
+Rotating under a constant torque with a 1.5 °/s bias, the bias-blind filter
+carries a **1.309 °/s standing rate error** and the augmented one **0.226 °/s**
+— 5.8× better. The estimate converges to within 0.094 °/s of truth with its
+uncertainty falling 1.434 → 0.054 °/s, and given no bias it does not invent one.
+
+The blind filter's bias error simply *is* the bias (0.48, 0.99, 1.98, 3.99 °/s
+as the bias grows) because it estimates nothing, while the augmented filter
+holds it under 0.39 °/s throughout. Downstream that only pays at large bias: at
+4 °/s the blind loop misses by 17.52 m against 3.49 m, and below ~2 °/s the two
+are inside the seed-to-seed noise. The descent is five seconds and the bias
+takes one to two of them to resolve, which is most of the reason.
+
+Day 12 also found a defect that had been in the guidance loop since Day 10:
+once a plan's horizon was spent the loop kept flying its last control, which
+for a landing plan is a lit engine, so the vehicle could climb away from the
+pad still thrusting — one run reversed at 4.8 m and tumbled through 878° back
+up to 174 m. That bug had inflated a Day 11 claim, which is corrected below.
 
 ### Navigation: a better estimate is not a better landing (Day 11)
 
@@ -130,9 +157,15 @@ One seed, three ways, on identical wind and identical sensor noise:
 | **EKF** | **1.71 m** | 22.52 m/s | 5,751 kg | 2.01 m |
 | naive (raw readings) | 92.51 m | 28.78 m/s | 11,120 kg | 4.94 m |
 
-Across four seeds the worst miss is **6.7 m filtered against 210 m
-unfiltered** — the unfiltered loop is usually fine and occasionally
-catastrophic, and filtering buys the tail rather than the median.
+**Corrected on Day 12.** This section originally claimed the worst miss was
+6.7 m filtered against 210 m unfiltered, and that filtering bought the tail.
+That 210 m was a defect in the guidance loop rather than in the estimator: once
+a plan's horizon was spent the loop kept flying its last control, which for a
+landing plan is a lit engine, so the vehicle climbed away from the pad. With
+that fixed the unfiltered worst case is 4.4 m against the filter's 6.7 m, and
+filtering does not bound the tail either. What survives is the estimate — four
+times better in four of four seeds — and the conclusion in this section's
+title, which the correction only strengthens.
 
 The day's real lesson came from a failing test. The EKF estimated 3–4× better
 in 4 of 4 seeds while landing *worse* in 3 of 4, because the process noise `Q`
@@ -534,6 +567,8 @@ src/
   sensors.py           simulated nav and attitude instruments (Day 11)
   ekf.py               Extended Kalman Filter over the coupled dynamics (Day 11)
   navigation_loop.py   guidance flown on the estimate, and its baselines (Day 11)
+  imu_bias.py          the true gyro bias, and the sensor that carries it (Day 12)
+  ekf_bias.py          the filter with the bias promoted to a state (Day 12)
   gnc/
     types.py           Param + Trajectory contracts shared by solver and viewer
     registry.py        problem plugin registry

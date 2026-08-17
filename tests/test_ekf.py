@@ -275,13 +275,23 @@ def test_filter_beats_no_filter():
                  True, f"nearer in only {wins_miss}/{n} seeds -- see the "
                        f"process-noise sweep")
 
-    # What it does buy is the tail. The naive loop is usually fine and
-    # occasionally catastrophic, which is the failure mode that matters.
-    ok &= report("filtering bounds the worst case", worst_ekf < worst_naive,
-                 f"worst miss {worst_ekf:.1f} m filtered vs "
-                 f"{worst_naive:.1f} m unfiltered")
-    ok &= report("...and the worst propellant draw",
-                 worst_fuel_ekf < worst_fuel_naive,
+    # This assertion used to read "filtering bounds the worst case", on the
+    # strength of a 210 m unfiltered miss against 6.7 m filtered. That 210 m
+    # was a bug in the guidance loop, not the estimator: once a plan's horizon
+    # was spent the loop kept flying its last control, and for a landing plan
+    # that is a lit engine, so the vehicle climbed away from the pad. Day 12
+    # found it and fixed it, and the unfiltered worst case fell to 4.4 m -- so
+    # the tail the filter appeared to be protecting against was mostly mine.
+    #
+    # What survives is the estimate, and the conclusion it supports is the
+    # stronger one Day 11 already drew: a better estimate is not a better
+    # landing, because the binding error is guidance rate rather than
+    # knowledge of the state.
+    ok &= report("...nor does it bound the worst case",
+                 True, f"worst miss {worst_ekf:.1f} m filtered vs "
+                       f"{worst_naive:.1f} m unfiltered")
+    ok &= report("both keep propellant in hand",
+                 max(worst_fuel_ekf, worst_fuel_naive) < 12000.0,
                  f"{worst_fuel_ekf:,.0f} kg vs {worst_fuel_naive:,.0f} kg")
     return ok
 

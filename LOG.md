@@ -829,10 +829,18 @@ Same wind and sensor noise, three ways:
 | naive | 92.51 m | 28.78 m/s | 11,120 kg | 4.94 m |
 
 Across four realisations the filter estimates three to four times better every
-time, and the worst-case miss falls from **210 m unfiltered to 6.7 m filtered**,
-with the 20 t propellant blowout gone. The median landing is a closer-run thing
-than that suggests, because the naive error is close to zero-mean sensor noise
-and successive replans average much of it out.
+time.
+
+> **Corrected on Day 12.** This entry originally continued: "and the worst-case
+> miss falls from 210 m unfiltered to 6.7 m filtered, with the 20 t propellant
+> blowout gone." That was wrong. The 210 m and the 20 t were a defect in the
+> guidance loop, not in the estimator — once a plan's horizon was spent the
+> loop kept flying its last control, which for a landing plan is a lit engine,
+> so the vehicle climbed away from the pad still thrusting. Day 12 found it and
+> fixed it, and the unfiltered worst case fell to 4.4 m against the filter's
+> 6.7 m. Filtering does not bound the tail here either; the tail was mine. What
+> survives is the estimate, and it makes the day's actual conclusion stronger
+> rather than weaker.
 
 ### The finding, which arrived as a failing test
 The first `Q` was wrong by two orders of magnitude, and how it surfaced is the
@@ -889,6 +897,75 @@ is Day 10's rate problem and no estimator can fix it.
 - Augment the state with a gyro bias term, which the sweep now justifies
 - The terminal-phase controller Day 10 asked for, since arrival speed remains
   the binding failure in all three navigation modes
+
+### Time spent
+_X hours_
+
+---
+
+## Day 12 — 2026-08-17
+
+### Done
+- `src/imu_bias.py`: the true gyro bias as a slow random walk, and the rate
+  channel it corrupts
+- `src/ekf_bias.py`: `BiasEKF`, Day 11's filter with the bias promoted to a
+  seventh state
+- `src/ekf.py`: refactored to read its dimension off the state, so the
+  augmented filter subclasses it instead of copying it
+- `src/navigation_loop.py`: a bias-aware mode, on the same wind and sensor
+  streams as the rest
+- `tests/test_imu_bias.py`: 8 groups
+- `src/bias_experiments.py`: three sweeps; `results/day12_bias.png`
+
+### It works, at the thing it was built for
+Rotating under a constant commanded torque with a 1.5 deg/s bias on the gyro,
+the bias-blind filter carries a **1.309 deg/s standing rate error** and the
+augmented one **0.226 deg/s** — 5.8x better. The bias estimate converges from
+nothing to within 0.094 deg/s of a true 1.449, with its uncertainty falling
+1.434 → 0.054 deg/s and not collapsing to false certainty. Given nothing to
+estimate it does not invent a bias (−0.145 deg/s) and does not degrade.
+
+The magnitude sweep is the clean version. The blind filter's bias error simply
+*is* the bias — 0.48, 0.99, 1.98, 3.99 deg/s at 0.5, 1, 2 and 4 — because it
+estimates nothing; the augmented filter holds it under 0.39 deg/s throughout.
+In landing terms that only pays at large bias: at 4 deg/s the blind loop misses
+by 17.52 m against 3.49 m aware, and below about 2 deg/s the two are inside the
+seed-to-seed noise. Attitude rate matters up to about 20 Hz (bias error 0.217
+at 5 Hz, 0.117 at 20, unchanged at 50), and a filter told the bias drifts ten
+times faster than it does loses most of the benefit (bias error 0.913 against
+0.117).
+
+### The correction, which matters more than the feature
+Wiring the augmented filter in produced a 569 m miss and a 14 s flight. The
+cause was not the filter: once a plan's horizon was spent, the guidance loop
+kept flying its **last commanded control**, and for a landing plan that is a
+lit engine. One run descended to 4.8 m, reversed to +17.8 m/s, and tumbled
+through 878 degrees on the way back up to 174 m. The loop now stops when the
+plan is spent, as the open-loop baseline always did.
+
+That bug was in Day 11's loop and in Day 10's, and **it invalidated a published
+Day 11 claim**. Day 11 reported that filtering bounds the tail: worst miss 210 m
+unfiltered against 6.7 m filtered, with a 20 t propellant blowout. Those
+catastrophes were the vehicle climbing away on a spent plan, not the unfiltered
+estimator. With the bug fixed the unfiltered worst case is **4.4 m** against the
+filter's 6.7 m, so filtering does not bound the tail either. Day 11's LOG entry
+and README section are corrected in place rather than quietly rewritten.
+
+What survives is the estimate: four times better in four of four seeds. And the
+correction strengthens Day 11's actual conclusion — a better estimate is not a
+better landing — rather than weakening it, since the tail was the one place the
+filter had appeared to pay off downstream.
+
+### Honest limitation
+The descent lasts about five seconds and the bias takes one to two of them to
+resolve, so a third of the flight is spent learning a constant. That is most of
+why augmentation buys so little downstream at realistic bias levels. Arrival
+speed remains the binding failure in every mode, which is Day 10's guidance-rate
+problem and is not an estimation problem at all.
+
+Experiment C — extending the state again with an accelerometer bias — is not
+done. It is the same pattern one dimension larger, and was left undone rather
+than half-done.
 
 ### Time spent
 _X hours_

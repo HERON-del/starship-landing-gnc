@@ -46,6 +46,10 @@ from src.closed_loop import (                                  # noqa: E402
 from src.warm_start import shift_reference                     # noqa: E402
 from src.sensors import SensorConfig, SensorSuite              # noqa: E402
 from src.ekf import EKF, default_process_noise                 # noqa: E402
+from src.imu_bias import GyroBiasProcess, BiasedSensorSuite    # noqa: E402
+from src.ekf_bias import (                                     # noqa: E402
+    BiasEKF, default_process_noise_bias,
+)
 from src.dynamics_6dof import Vehicle6DoF                      # noqa: E402
 from src.aero import AeroConfig                                # noqa: E402
 
@@ -59,6 +63,8 @@ def run_navigation(
     omega0=0.0, gamma_gs_deg=75.0,
     wind_sigma_x=6.0, wind_sigma_z=2.0, wind_tau=2.0, wind_seed=0,
     sensors=None, sensor_seed=0, q_scale=1.0,
+    bias0_deg_s=0.0, bias_walk_deg_s=0.01, bias_aware=False,
+    filter_bias_walk_deg_s=0.02,
     max_steps=200, keep_path=False, verbose=True,
 ):
     """
@@ -74,7 +80,17 @@ def run_navigation(
     aero = aero if aero is not None else AeroConfig()
     cfg = sensors or SensorConfig()
     gusts = WindGusts(wind_sigma_x, wind_sigma_z, wind_tau, wind_seed)
-    suite = SensorSuite(cfg, seed=sensor_seed)
+    # A non-zero bias switches in the biased instrument and the true bias
+    # process. The filter is never handed either -- only the readings.
+    biased = abs(float(bias0_deg_s)) > 0.0 or bias_aware
+    if biased:
+        proc = GyroBiasProcess(b0=np.radians(bias0_deg_s),
+                               sigma_walk=np.radians(bias_walk_deg_s),
+                               seed=sensor_seed + 1000)
+        suite = BiasedSensorSuite(cfg, seed=sensor_seed, bias_process=proc)
+    else:
+        proc = None
+        suite = SensorSuite(cfg, seed=sensor_seed)
 
     truth = np.array([x0, z0, vx0, vz0, np.radians(theta0_deg), omega0,
                       vehicle.m_wet], dtype=float)
@@ -89,7 +105,13 @@ def run_navigation(
         x_hat[:4] = first["nav"]
     if "att" in first:
         x_hat[4:6] = first["att"]
-    ekf = EKF(x_hat, truth[6], vehicle, aero, Q=default_process_noise(q_scale))
+    if bias_aware:
+        ekf = BiasEKF(x_hat, truth[6], vehicle, aero,
+                      Q=default_process_noise_bias(
+                          q_scale, filter_bias_walk_deg_s))
+    else:
+        ekf = EKF(x_hat, truth[6], vehicle, aero,
+                  Q=default_process_noise(q_scale))
     last_raw = x_hat.copy()
 
     def estimate():
@@ -109,7 +131,10 @@ def run_navigation(
     log = {"t": [0.0], "err_pos": [float(np.hypot(*(x_hat[:2] - truth[:2])))],
            "err_vel": [float(np.hypot(*(x_hat[2:4] - truth[2:4])))],
            "err_theta": [float(abs(x_hat[4] - truth[4]))],
-           "sigma_pos": [ekf.position_sigma()]}
+           "sigma_pos": [ekf.position_sigma()],
+           "b_true": [proc.b if proc else 0.0],
+           "b_est": [getattr(ekf, "bias", 0.0)],
+           "b_sigma": [getattr(ekf, "bias_sigma", 0.0)]}
     replan = {"t": [], "solve_time": [], "gap": []}
     fine_t, fine_y = ([0.0], [truth.copy()]) if keep_path else (None, None)
 
@@ -146,6 +171,8 @@ def run_navigation(
         for i in range(n_sub):
             ekf.predict(sig_c, del_c, dt_sub)
             t_read = t_sim + (i + 1) * dt_sub
+            if proc is not None:
+                suite.advance(t_read, dt_sub)
             true_here = y[min(int((i + 1) * (len(y) - 1) / n_sub), len(y) - 1)]
             got = suite.due(t_read, true_here)
             if "att" in got:
@@ -157,6 +184,14 @@ def run_navigation(
 
         hit = _ground_crossing(y)
         truth_end = hit if hit is not None else y[-1]
+        # The plan has a finite horizon. Once it is spent there is no guidance
+        # left, and `_fly` simply clamps to the last control -- which for a
+        # landing plan is a lit engine. Left running, the vehicle climbs away
+        # from the pad still thrusting: measured, one run reached 4.8 m,
+        # reversed to +17.8 m/s, and tumbled through 878 degrees on the way
+        # back up to 174 m. Stop when the plan is spent, as the open-loop
+        # baseline already does.
+        plan_spent = age + guidance_dt >= float(plan["t_f"]) - 1e-9
         t_sim += guidance_dt
         age += guidance_dt
         est_now = ekf.x if mode != "naive" else last_raw
@@ -165,11 +200,17 @@ def run_navigation(
         log["err_vel"].append(float(np.hypot(*(est_now[2:4] - truth_end[2:4]))))
         log["err_theta"].append(float(abs(est_now[4] - truth_end[4])))
         log["sigma_pos"].append(ekf.position_sigma())
+        log["b_true"].append(proc.b if proc else 0.0)
+        log["b_est"].append(getattr(ekf, "bias", 0.0))
+        log["b_sigma"].append(getattr(ekf, "bias_sigma", 0.0))
 
         if hit is not None:
             final = hit
             break
         truth = y[-1]
+        if plan_spent and ref is None:
+            final = truth
+            break
 
     if final is None:
         final = truth
@@ -186,6 +227,11 @@ def run_navigation(
         "final_est_pos_err": float(log["err_pos"][-1]),
         "mean_solve_time": float(np.mean(replan["solve_time"])),
         "guidance_dt": guidance_dt,
+        "bias_aware": bool(bias_aware),
+        "b_true_final": float(log["b_true"][-1]),
+        "b_est_final": float(log["b_est"][-1]),
+        "b_err_final": float(abs(log["b_est"][-1] - log["b_true"][-1])),
+        "b_err_mean": float(np.mean(np.abs(log["b_est"] - log["b_true"]))),
     })
     if keep_path:
         y_arr = np.asarray(fine_y)

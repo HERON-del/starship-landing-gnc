@@ -95,6 +95,13 @@ class EKF:
         self.P = default_initial_covariance() if P0 is None else np.array(P0,
                                                                           float)
         self.Q = default_process_noise() if Q is None else np.array(Q, float)
+        # Dimension is read off the state rather than fixed, so an augmented
+        # filter can subclass this one instead of copying it. Day 12 adds a
+        # gyro-bias state and changes nothing else in the machinery.
+        self.n = self.x.size
+        # Finite-difference steps, per state, since metres and radians are not
+        # comparable quantities to perturb by the same amount.
+        self._eps = np.array([1e-3, 1e-3, 1e-3, 1e-3, 1e-5, 1e-5])
 
     # -- process model --------------------------------------------------
     def _deriv(self, x, sigma, delta):
@@ -144,11 +151,12 @@ class EKF:
         matters because the step has to be small enough not to smear the
         attitude terms and large enough to survive cancellation.
         """
-        F = np.zeros((N_STATE, N_STATE))
+        n = self.n
+        F = np.zeros((n, n))
         # Scaled per state, since metres and radians are not comparable.
-        eps = np.array([1e-3, 1e-3, 1e-3, 1e-3, 1e-5, 1e-5])
-        for j in range(N_STATE):
-            dx = np.zeros(N_STATE)
+        eps = self._eps
+        for j in range(n):
+            dx = np.zeros(n)
             dx[j] = eps[j]
             hi = self._rk4(x + dx, sigma, delta, dt)
             lo = self._rk4(x - dx, sigma, delta, dt)
@@ -188,7 +196,7 @@ class EKF:
         S = H @ self.P @ H.T + R
         K = self.P @ H.T @ np.linalg.inv(S)
         self.x = self.x + K @ y
-        I_KH = np.eye(N_STATE) - K @ H
+        I_KH = np.eye(self.n) - K @ H
         self.P = I_KH @ self.P @ I_KH.T + K @ R @ K.T
         self.P = 0.5 * (self.P + self.P.T)      # kill any residual asymmetry
         return y
