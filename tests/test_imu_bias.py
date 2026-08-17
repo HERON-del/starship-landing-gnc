@@ -31,6 +31,7 @@ from src.imu_bias import (                                     # noqa: E402
 )
 from src.ekf_bias import (                                     # noqa: E402
     BiasEKF, H_ATT_BIAS, H_NAV_BIAS, default_process_noise_bias,
+    DualBiasEKF, H_NAV_DUAL, H_ATT_DUAL,
 )
 from src.ekf import EKF                                        # noqa: E402
 from src.sensors import SensorConfig, measure_attitude         # noqa: E402
@@ -248,6 +249,63 @@ def test_closed_loop():
 
 
 # ======================================================================
+def test_dual_bias():
+    """
+    Two sensor errors at once, on two different instruments.
+
+    The point of the augmentation pattern is that it generalises. Adding a
+    velocity-channel bias should cost nothing structural and should not disturb
+    the gyro estimate, because the two errors are seen by different instruments
+    and so cannot be confused for one another.
+    """
+    print("\nTEST 9 - Two biases at once (accelerometer channel)")
+    ok = report("nav rate row reads vx and its bias together",
+                H_NAV_DUAL[2, 2] == 1.0 and H_NAV_DUAL[2, 7] == 1.0)
+    ok &= report("other nav rows are untouched by it",
+                 np.allclose(H_NAV_DUAL[[0, 1, 3], 7], 0.0))
+    ok &= report("attitude rows cannot see the velocity bias",
+                 np.allclose(H_ATT_DUAL[:, 7], 0.0))
+
+    veh, aero = Vehicle6DoF(), AeroConfig(enabled=False)
+    cfg = SensorConfig()
+    gyro = GyroBiasProcess(b0=np.radians(BIAS_DEG),
+                           sigma_walk=np.radians(0.01), seed=7)
+    accel = GyroBiasProcess(b0=2.5, sigma_walk=0.01, seed=8)   # m/s
+    suite = BiasedSensorSuite(cfg, seed=5, bias_process=gyro,
+                              accel_bias_process=accel)
+
+    truth = np.array([0.0, 3000.0, 0.0, -30.0, 0.0, 0.0, veh.m_wet])
+    f = DualBiasEKF(truth[:6].copy(), truth[6], veh, aero)
+    sigma, delta, dt = 3.0e6, np.radians(3.0), 0.05
+    for k in range(int(20.0 / dt)):
+        t = (k + 1) * dt
+        tau = sigma * veh.L_engine * np.sin(delta)
+        truth[5] += tau / veh.I_pitch * dt
+        truth[4] += truth[5] * dt
+        suite.advance(t, dt)
+        f.predict(sigma, delta, dt)
+        got = suite.due(t, truth)
+        if "att" in got:
+            f.update_attitude(got["att"], cfg.R_att())
+        if "nav" in got:
+            f.update_nav(got["nav"], cfg.R_nav())
+
+    gyro_err = abs(np.degrees(f.bias - gyro.b))
+    accel_err = abs(f.accel_bias - accel.b)
+    ok &= report("gyro bias still resolved", gyro_err < 0.3,
+                 f"{gyro_err:.3f} deg/s out of "
+                 f"{np.degrees(gyro.b):.3f}")
+    ok &= report("velocity bias resolved too", accel_err < 0.6,
+                 f"{accel_err:.3f} m/s out of {accel.b:.3f}")
+    ok &= report("both uncertainties shrank",
+                 f.bias_sigma < np.radians(0.5) and f.accel_bias_sigma < 1.0,
+                 f"{np.degrees(f.bias_sigma):.3f} deg/s, "
+                 f"{f.accel_bias_sigma:.3f} m/s")
+    ok &= report("8x8 covariance stays positive semi-definite",
+                 float(np.linalg.eigvalsh(f.P).min()) > -1e-9)
+    return ok
+
+
 def main():
     print("=" * 70)
     print("DAY 12 - IMU BIAS ESTIMATION VERIFICATION")
@@ -255,7 +313,8 @@ def main():
     oks = [test_bias_process(), test_biased_sensor(),
            test_measurement_matrices(), test_bias_converges(),
            test_beats_blind(), test_covariance(),
-           test_no_bias_not_penalised(), test_closed_loop()]
+           test_no_bias_not_penalised(), test_closed_loop(),
+           test_dual_bias()]
     print("\n" + "=" * 70)
     print("ALL TESTS PASSED" if all(oks) else "SOME TESTS FAILED")
     print("=" * 70)

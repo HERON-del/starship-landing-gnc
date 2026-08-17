@@ -143,3 +143,95 @@ class BiasEKF(EKF):
         unaugmented filter cannot produce.
         """
         return float(self.x[5])
+
+
+# ======================================================================
+# Two simultaneous sensor errors
+# ======================================================================
+N_STATE_DUAL = 8
+
+# Nav sensor: the downrange-velocity row now reads vx and its bias together,
+# exactly as the rate row does for the gyro.
+H_NAV_DUAL = np.zeros((4, N_STATE_DUAL))
+H_NAV_DUAL[0, 0] = H_NAV_DUAL[1, 1] = 1.0
+H_NAV_DUAL[2, 2] = H_NAV_DUAL[3, 3] = 1.0
+H_NAV_DUAL[2, 7] = 1.0
+
+H_ATT_DUAL = np.zeros((2, N_STATE_DUAL))
+H_ATT_DUAL[0, 4] = 1.0
+H_ATT_DUAL[1, 5] = 1.0
+H_ATT_DUAL[1, 6] = 1.0
+
+
+def default_process_noise_dual(scale=1.0, bias_walk_deg_s=0.02,
+                               accel_walk_ms=0.05):
+    """The 7x7 bias block, plus a random walk for the velocity bias."""
+    Q7 = default_process_noise_bias(scale, bias_walk_deg_s)
+    Q = np.zeros((N_STATE_DUAL, N_STATE_DUAL))
+    Q[:7, :7] = Q7
+    Q[7, 7] = float(accel_walk_ms) ** 2
+    return Q
+
+
+def default_initial_covariance_dual(bias_sigma_deg_s=2.0,
+                                    accel_sigma_ms=3.0):
+    P = np.zeros((N_STATE_DUAL, N_STATE_DUAL))
+    P[:7, :7] = default_initial_covariance_bias(bias_sigma_deg_s)
+    P[7, 7] = float(accel_sigma_ms) ** 2
+    return P
+
+
+class DualBiasEKF(BiasEKF):
+    """
+    Eight states: the vehicle, a gyro bias, and a velocity-channel bias.
+
+    This is the generalisation the pattern promises. Nothing structural
+    changes: one more row of `f` that stays at zero, one more diagonal entry
+    in `Q`, and one more column in the measurement matrices with a 1 wherever
+    the instrument cannot separate the error from the signal.
+
+    The two biases are estimable at the same time because they are observed by
+    *different instruments*. The gyro bias shows up only in the attitude
+    sensor's rate channel and the velocity bias only in the nav sensor's
+    downrange channel, so there is no path by which one can be mistaken for
+    the other -- which is exactly why adding the second one does not disturb
+    the first.
+    """
+
+    def __init__(self, x0, m0, vehicle: Vehicle6DoF = None,
+                 aero: AeroConfig = None, P0=None, Q=None, b0=0.0, a0=0.0):
+        x0 = np.asarray(x0, dtype=float)
+        if x0.size == 6:
+            x0 = np.append(x0, [float(b0), float(a0)])
+        elif x0.size == 7:
+            x0 = np.append(x0, float(a0))
+        # Skip BiasEKF.__init__, which would size the 7-state defaults.
+        EKF.__init__(self, x0, m0, vehicle, aero,
+                     P0=default_initial_covariance_dual() if P0 is None
+                     else P0,
+                     Q=default_process_noise_dual() if Q is None else Q)
+        self._eps = np.append(self._eps, [1e-6, 1e-4])
+
+    def _deriv(self, x, sigma, delta):
+        d6 = EKF._deriv(self, np.asarray(x, dtype=float)[:6], sigma, delta)
+        return np.append(d6, [0.0, 0.0])
+
+    def update_nav(self, z_meas, R):
+        return self._update(H_NAV_DUAL, R, z_meas)
+
+    def update_attitude(self, z_meas, R):
+        return self._update(H_ATT_DUAL, R, z_meas)
+
+    def state(self):
+        s = super().state()
+        s["b_vx"] = float(self.x[7])
+        return s
+
+    @property
+    def accel_bias(self) -> float:
+        """Current velocity-channel bias estimate [m/s]."""
+        return float(self.x[7])
+
+    @property
+    def accel_bias_sigma(self) -> float:
+        return float(np.sqrt(max(self.P[7, 7], 0.0)))

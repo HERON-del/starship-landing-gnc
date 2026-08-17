@@ -59,6 +59,21 @@ class GyroBiasProcess:
         return self.b
 
 
+def measure_nav_biased(truth, accel_bias, cfg: SensorConfig, rng):
+    """
+    A nav reading whose downrange-velocity channel carries a bias.
+
+    The gyro case biases a rate; this biases a velocity, which is what an
+    accelerometer bias looks like once it has been integrated by the
+    navigation system feeding the Doppler channel. Only `vx` is affected, so
+    the filter has to work out which channel is lying rather than being told.
+    """
+    from src.sensors import measure_nav
+    out = measure_nav(truth, cfg, rng)
+    out[2] += float(accel_bias)
+    return out
+
+
 def measure_attitude_biased(truth, bias_true, cfg: SensorConfig, rng):
     """
     An attitude reading corrupted by the true bias as well as by noise.
@@ -85,28 +100,39 @@ class BiasedSensorSuite:
     """
 
     def __init__(self, cfg: SensorConfig = None, seed: int = 0,
-                 bias_process: GyroBiasProcess = None):
+                 bias_process: GyroBiasProcess = None,
+                 accel_bias_process: GyroBiasProcess = None):
         from src.sensors import measure_nav
         self._measure_nav = measure_nav
         self.cfg = cfg or SensorConfig()
         self.rng = np.random.default_rng(seed)
         self.bias = bias_process or GyroBiasProcess(seed=seed + 1000)
+        # Optional second error source. `GyroBiasProcess` is reused rather than
+        # duplicated -- a slow random walk about an offset is the same process
+        # whatever quantity it corrupts.
+        self.accel_bias = accel_bias_process
         self._next_nav = 0.0
         self._next_att = 0.0
-        self.history = {"t": [], "b_true": []}
+        self.history = {"t": [], "b_true": [], "a_true": []}
 
     def advance(self, t, dt):
-        """Step the true bias, and log it."""
+        """Step the true biases, and log them."""
         b = self.bias.step(dt)
+        a = self.accel_bias.step(dt) if self.accel_bias else 0.0
         self.history["t"].append(t)
         self.history["b_true"].append(b)
+        self.history["a_true"].append(a)
         return b
 
     def due(self, t, truth):
         """Readings that have come due at or before `t`."""
         out = {}
         if self.cfg.nav_enabled and t + 1e-12 >= self._next_nav:
-            out["nav"] = self._measure_nav(truth, self.cfg, self.rng)
+            if self.accel_bias is not None:
+                out["nav"] = measure_nav_biased(truth, self.accel_bias.b,
+                                                self.cfg, self.rng)
+            else:
+                out["nav"] = self._measure_nav(truth, self.cfg, self.rng)
             while self._next_nav <= t + 1e-12:
                 self._next_nav += self.cfg.dt_nav
         if t + 1e-12 >= self._next_att:

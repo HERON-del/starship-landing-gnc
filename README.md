@@ -135,6 +135,14 @@ holds it under 0.39 °/s throughout. Downstream that only pays at large bias: at
 are inside the seed-to-seed noise. The descent is five seconds and the bias
 takes one to two of them to resolve, which is most of the reason.
 
+The pattern generalises, which is the point of it. Extending the state once
+more — to eight, adding a bias on the nav sensor's downrange-velocity channel —
+resolves **both** errors at once: the gyro bias to 0.135 °/s of a true 1.405,
+and the velocity bias to 0.100 m/s of a true 2.487. Nothing structural changes,
+just one more zero row in `f`, one more diagonal in `Q`, and one more column in
+the measurement matrices. They stay separable because they are seen by
+*different* instruments; two errors on the same channel would not be.
+
 Day 12 also found a defect that had been in the guidance loop since Day 10:
 once a plan's horizon was spent the loop kept flying its last control, which
 for a landing plan is a lit engine, so the vehicle could climb away from the

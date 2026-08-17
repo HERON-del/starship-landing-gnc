@@ -963,9 +963,25 @@ why augmentation buys so little downstream at realistic bias levels. Arrival
 speed remains the binding failure in every mode, which is Day 10's guidance-rate
 problem and is not an estimation problem at all.
 
-Experiment C — extending the state again with an accelerometer bias — is not
-done. It is the same pattern one dimension larger, and was left undone rather
-than half-done.
+### The pattern generalises, which is the real claim
+Experiment C extends the state once more, to eight, with a bias on the nav
+sensor's downrange-velocity channel — an accelerometer error once the
+navigation system has integrated it. Nothing structural changed: one more row
+of `f` that stays at zero, one more diagonal entry in `Q`, and one more column
+in the measurement matrices with a 1 wherever the instrument cannot separate
+the error from the signal.
+
+With both errors active at once, the filter resolves **both**: the gyro bias to
+0.135 deg/s of a true 1.405, and the velocity bias to 0.100 m/s of a true
+2.487, with the uncertainties falling to 0.052 deg/s and 0.319 m/s and the 8x8
+covariance staying positive semi-definite.
+
+They are separable because they are seen by *different instruments*. The gyro
+bias appears only in the attitude sensor's rate channel and the velocity bias
+only in the nav sensor's downrange channel, so there is no path by which one
+can be mistaken for the other — which is why adding the second one does not
+disturb the first. Two errors on the *same* channel would not be separable at
+all, and that limit is worth knowing before reaching for another state.
 
 ### Time spent
 _X hours_
