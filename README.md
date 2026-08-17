@@ -32,8 +32,11 @@ glance. The translucent cone is the glideslope corridor.
 | **Export** | full run as JSON — parameters plus trajectory |
 | **Re-solve** | `r`, or automatically on any control change |
 
-Twelve problems are registered — one per day of work, plus the Week 1 3-DoF
-optimiser. The Day 11 entry is the last link in the chain: it flies the same
+Thirteen problems are registered — one per day of work, plus the Week 1 3-DoF
+optimiser. The Day 12 entry puts the true gyro bias, the filter's estimate of
+it, and the filter's own uncertainty on that estimate side by side in the
+telemetry strip, so you can watch a sensor error become observable — and
+switch to the bias-blind filter to watch the estimate stay flat at zero. The Day 11 entry is the last link in the chain: it flies the same
 descent three ways on identical wind *and* identical sensor noise — guidance
 reading the truth, an EKF estimate, or the raw sensor — and plots the estimate's
 own 1-sigma beside its actual error, so you can see whether the filter knows how
