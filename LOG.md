@@ -802,6 +802,189 @@ _X hours_
 
 ---
 
+## Day 11 — 2026-08-17
+
+### Done
+- `src/sensors.py`: nav and attitude instruments, each on its own clock, with
+  an optional gyro bias
+- `src/ekf.py`: EKF over the six translational and rotational states, mean by
+  RK4 through the true coupled dynamics, covariance by numerical Jacobian,
+  Joseph-form update
+- `src/navigation_loop.py`: Day 10's guidance rewired onto the estimate, with
+  `truth` and `naive` baselines on identical wind *and* identical sensor noise
+- `tests/test_ekf.py`: 7 groups
+- `src/navigation_experiments.py`: four sweeps
+- `navigation` added to the viewer (twelve problems)
+- `results/day11_navigation.png`, `day11_sweeps.png`
+
+This closes the limitation Day 10 recorded: guidance no longer reads the truth.
+
+### The result
+Same wind and sensor noise, three ways:
+
+| | miss | arrival | propellant | est. error |
+|---|---|---|---|---|
+| truth (Day 10's privilege) | 0.28 m | 15.41 m/s | 6,003 kg | — |
+| **EKF** | **1.71 m** | 22.52 m/s | 5,751 kg | 2.01 m |
+| naive | 92.51 m | 28.78 m/s | 11,120 kg | 4.94 m |
+
+Across four realisations the filter estimates three to four times better every
+time, and the worst-case miss falls from **210 m unfiltered to 6.7 m filtered**,
+with the 20 t propellant blowout gone. The median landing is a closer-run thing
+than that suggests, because the naive error is close to zero-mean sensor noise
+and successive replans average much of it out.
+
+### The finding, which arrived as a failing test
+The first `Q` was wrong by two orders of magnitude, and how it surfaced is the
+interesting part. Test 7 failed asserting the filter lands nearer: the EKF
+estimated 3-4x better in **4 of 4** seeds while landing worse in **3 of 4**.
+
+The process-noise sweep explains it. At the tuned value the miss is 3.13 m; a
+hundred times tighter it is 34.45 m -- while mean estimation error goes 1.60 m
+to 2.22 m, which is nothing. An under-confident `Q` makes the filter trust its
+own dynamics through gusts it cannot see, and the error that produces is a
+**lag** rather than noise. Successive replans average noise out and cannot
+average out a bias.
+
+So **mean estimation error is the wrong figure of merit for a filter inside a
+control loop.** A lagging estimate and a noisy one are indistinguishable by it
+and behave nothing alike. The sweep shows the other side too: at 10x and 100x
+the tuned value the estimate degrades again (2.37 m, 3.23 m) as the filter
+starts chasing sensor noise, so there is a genuine optimum rather than a
+monotone.
+
+### The other sweeps
+- **Nav rate is a hardware specification, and a sharp one.** 1 Hz gives a 175 m
+  miss and 12,785 kg; 2 Hz gives 1.98 m and 5,913 kg. The loop needs position
+  aiding at 2 Hz or better and gains almost nothing above it, even though
+  estimation error keeps improving out to 20 Hz (0.78 m). Estimate quality and
+  control quality are again different things.
+- **Position aiding is not optional.** Switching the nav sensor off leaves the
+  filter dead-reckoning on attitude alone: estimation error 1.60 m to 7.42 m,
+  and nothing bounds the drift.
+- **An unestimated bias is invisible where you look for it.** Miss runs 3.13,
+  3.43, 10.22 and 13.67 m at gyro biases of 0, 0.5, 1 and 2 deg/s, while
+  position estimation error stays flat at 1.38-1.60 m. The filter reports
+  health while the control degrades -- the textbook argument for a bias state,
+  and it only became visible after the `Q` fix.
+
+### Problems hit
+- `EKF(aero=None)` silently substitutes a default `AeroConfig()`, so the
+  "known-linear" Jacobian test still had drag in it and failed by 0.22. With
+  `AeroConfig(enabled=False)` the Jacobian matches the exact discrete
+  transition matrix to 2.4e-11.
+- Fed the sensor model end-of-interval truth while the filter sat at the start
+  of the interval, injecting a systematic lead that made the filter look 17x
+  worse than it is -- 16.40 m against the 0.96 m it actually achieves.
+- Test 7 asserted that filtering lands nearer. It does not, in the median. The
+  assertion was corrected to what the data supports -- the estimate is better
+  every time, and the tail is bounded -- rather than relaxed until it passed.
+
+### Honest limitation
+The filter has no bias state, so the gyro-bias degradation above is real and
+unaddressed. Guidance also still arrives too fast in every mode, because that
+is Day 10's rate problem and no estimator can fix it.
+
+### Next (Day 12)
+- Augment the state with a gyro bias term, which the sweep now justifies
+- The terminal-phase controller Day 10 asked for, since arrival speed remains
+  the binding failure in all three navigation modes
+
+### Time spent
+_X hours_
+
+---
+
+## Day 11 — 2026-08-16
+
+### Done
+- `src/sensors.py`: nav and attitude instruments, each on its own clock
+- `src/ekf.py`: EKF over the real coupled dynamics, numerical Jacobian,
+  Joseph-form update
+- `src/navigation_loop.py`: Day 10's guidance rewired onto the estimate, with
+  truth and naive baselines on identical wind *and* identical sensor noise
+- `tests/test_ekf.py`: 7 groups
+- `src/navigation_experiments.py`: four sweeps
+- `navigation` added to the viewer (twelve problems)
+- `results/day11_navigation.png`, `day11_sweeps.png`
+
+This closes the limitation Day 10 recorded: raw estimates were being fed
+straight into a re-optimisation that is bang-bang by construction, and 3 m of
+position noise produced a 109 m worst-case miss.
+
+### The result
+One seed, three ways, identical wind and identical sensor noise:
+
+| | miss | arrival | fuel | est. error |
+|---|---|---|---|---|
+| truth (Day 10's privilege) | 0.28 m | 15.41 m/s | 6,003 kg | — |
+| **EKF** | **1.71 m** | 22.52 m/s | 5,751 kg | 2.01 m |
+| naive | 92.51 m | 28.78 m/s | 11,120 kg | 4.94 m |
+
+Across four seeds the worst miss is **6.7 m filtered against 210 m
+unfiltered**, and the 20.2-tonne propellant blowout disappears.
+
+### The finding, which arrived as a failing test
+The first `Q` was wrong by two orders of magnitude, and the way that surfaced
+is the whole lesson. The test asserting "filtering lands nearer" failed: the
+EKF estimated three to four times better in **4 of 4** seeds and landed worse
+in **3 of 4**. Rather than weaken the assertion, the sweep was run.
+
+Scaling `Q` over the closed loop:
+
+| Q scale | est. error | miss |
+|---|---|---|
+| x0.01 | 2.22 m | 34.45 m |
+| x0.1 | 1.55 m | 11.74 m |
+| **x1** | **1.60 m** | **3.13 m** |
+| x10 | 2.37 m | 4.76 m |
+| x100 | 3.23 m | 3.28 m |
+
+Note what barely moves. A filter tuned a hundred times too tight estimates
+about as accurately *on average* and lands eleven times further away, because
+an under-confident `Q` makes it trust its own dynamics through gusts it cannot
+see and the resulting error is a **lag** rather than noise. Successive replans
+average noise out and cannot average out a bias. **Mean estimation error is the
+wrong metric for a control loop** — a lagging estimate and a noisy one are
+indistinguishable by it and behave nothing alike. The default was corrected and
+the same seed went from 22.40 m to 1.71 m.
+
+### The other sweeps
+- **Sensor rate is a hardware spec, not a trend.** 1 Hz gives a 175 m miss and
+  12,785 kg; 2 Hz gives 1.98 m. The loop needs at least 2 Hz position aiding
+  and gains nothing above it, while estimation error keeps improving to 20 Hz —
+  the same divergence between estimate quality and control quality.
+- **Attitude alone is not navigation.** With the nav sensor off the filter
+  dead-reckons and estimation error goes 1.60 m to 7.42 m, with nothing to
+  bound the drift.
+- **An unestimated bias is invisible where you look for it.** A gyro bias takes
+  the miss from 3.13 m to 13.67 m at 2 deg/s while the *position* estimate
+  stays flat near 1.5 m. The filter reports good health while the steering
+  degrades, which is the argument for augmenting the state with a bias term.
+
+### Problems hit
+- `EKF(aero=None)` silently substitutes a default `AeroConfig()`, so the
+  "known-linear" Jacobian test still had drag in it and failed by 0.22. With
+  `AeroConfig(enabled=False)` the Jacobian matches the exact transition matrix
+  to 2.4e-11.
+- Fed end-of-interval truth to measurements taken mid-interval, which injected
+  a systematic lead and made the filter look 17x worse than it is — 16.40 m
+  against its real 0.96 m. Sampling truth at the filter's own rate fixed it.
+- Called the bias experiment inconclusive on the first pass. It was, but only
+  because the mistuned `Q` was swamping it; with the corrected filter the trend
+  is clean and monotonic.
+
+### Next
+- Augment the state with a gyro bias term, which experiment D now argues for
+  quantitatively
+- Re-run Day 9's dispersion sweep with the full stack — guidance, control and
+  navigation — against the standing 29.6% figure
+
+### Time spent
+_X hours_
+
+---
+
 ## Day 3 — 2026-08-10
 
 ### Done

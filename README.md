@@ -32,8 +32,12 @@ glance. The translucent cone is the glideslope corridor.
 | **Export** | full run as JSON — parameters plus trajectory |
 | **Re-solve** | `r`, or automatically on any control change |
 
-Eleven problems are registered — one per day of work, plus the Week 1 3-DoF
-optimiser. The Day 10 entry flies the same descent twice, closed-loop and
+Twelve problems are registered — one per day of work, plus the Week 1 3-DoF
+optimiser. The Day 11 entry is the last link in the chain: it flies the same
+descent three ways on identical wind *and* identical sensor noise — guidance
+reading the truth, an EKF estimate, or the raw sensor — and plots the estimate's
+own 1-sigma beside its actual error, so you can see whether the filter knows how
+wrong it is. The Day 10 entry flies the same descent twice, closed-loop and
 open-loop, on an identical gust sequence, and lets you switch between them —
 which is the clearest way to see that replanning fixes position and costs
 arrival speed. The Day 7 entry is the first that will render a problem with *no*
@@ -98,6 +102,7 @@ published results in the trajectory-optimization literature.
 | Day 8 | Trapezoidal collocation, free final time, log-mass | done |
 | Day 9 | Monte Carlo dispersion analysis, flown open-loop | done |
 | Day 10 | Closed-loop guidance: warm-started replanning | done |
+| Day 11 | Navigation: sensors and an Extended Kalman Filter | done |
 | Week 1 | 3-DoF convex powered descent, glideslope + tilt cones | done |
 | Week 2 | Sequential Convex Programming (SCvx) solver | done |
 | Week 3 | 6-DoF rigid-body dynamics with quaternions | |
@@ -108,6 +113,41 @@ published results in the trajectory-optimization literature.
 ---
 
 ## Results so far
+
+### Navigation: a better estimate is not a better landing (Day 11)
+
+Day 10's guidance read the true state, which no real vehicle has. This replaces
+it with an EKF fusing a 5 Hz position sensor and a 20 Hz attitude sensor, and
+feeds the *estimate* to the solver.
+
+![Navigation](results/day11_navigation.png)
+
+One seed, three ways, on identical wind and identical sensor noise:
+
+| | miss | arrival | fuel | est. error |
+|---|---|---|---|---|
+| truth (Day 10's privilege) | 0.28 m | 15.41 m/s | 6,003 kg | — |
+| **EKF** | **1.71 m** | 22.52 m/s | 5,751 kg | 2.01 m |
+| naive (raw readings) | 92.51 m | 28.78 m/s | 11,120 kg | 4.94 m |
+
+Across four seeds the worst miss is **6.7 m filtered against 210 m
+unfiltered** — the unfiltered loop is usually fine and occasionally
+catastrophic, and filtering buys the tail rather than the median.
+
+The day's real lesson came from a failing test. The EKF estimated 3–4× better
+in 4 of 4 seeds while landing *worse* in 3 of 4, because the process noise `Q`
+was set two orders of magnitude too low. Scaling it, the miss runs 34.45 m,
+11.74 m, **3.13 m**, 4.76 m, 3.28 m from ×0.01 to ×100 — while mean estimation
+error barely moves. An under-confident filter trusts its own dynamics through
+gusts it cannot see, and that error is a **lag**, not noise: successive replans
+average noise out and cannot average out a bias. **Mean estimation error is the
+wrong metric for a control loop.**
+
+The sweeps also give a hardware spec — the loop needs at least 2 Hz position
+aiding (1 Hz gives a 175 m miss) and gains nothing above it — and a case for
+future work: an unestimated gyro bias takes the miss from 3.13 m to 13.67 m
+while the position estimate stays flat near 1.5 m, the filter reporting good
+health while the steering degrades.
 
 ### Closing the loop, and what it does not fix (Day 10)
 
@@ -491,6 +531,9 @@ src/
   monte_carlo.py       dispersion analysis, flown through the truth model (Day 9)
   warm_start.py        previous solution -> next solve's reference (Day 10)
   closed_loop.py       MPC guidance loop and open-loop baseline (Day 10)
+  sensors.py           simulated nav and attitude instruments (Day 11)
+  ekf.py               Extended Kalman Filter over the coupled dynamics (Day 11)
+  navigation_loop.py   guidance flown on the estimate, and its baselines (Day 11)
   gnc/
     types.py           Param + Trajectory contracts shared by solver and viewer
     registry.py        problem plugin registry
