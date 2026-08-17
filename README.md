@@ -32,8 +32,12 @@ glance. The translucent cone is the glideslope corridor.
 | **Export** | full run as JSON — parameters plus trajectory |
 | **Re-solve** | `r`, or automatically on any control change |
 
-Thirteen problems are registered — one per day of work, plus the Week 1 3-DoF
-optimiser. The Day 12 entry puts the true gyro bias, the filter's estimate of
+Fourteen problems are registered — one per day of work, plus the Week 1 3-DoF
+optimiser. The Day 13 entry is the only one with no optimiser behind it and no
+landing to fly: it turns the vehicle at a constant rate and shows what the Euler
+description of that rotation does at the singularity while the quaternion sails
+through it, and it carries the frame control that separates a body rate from an
+inertial one. The Day 12 entry puts the true gyro bias, the filter's estimate of
 it, and the filter's own uncertainty on that estimate side by side in the
 telemetry strip, so you can watch a sensor error become observable — and
 switch to the bias-blind filter to watch the estimate stay flat at zero. The Day 11 entry is the last link in the chain: it flies the same
@@ -151,6 +155,18 @@ negligible. It matters because the error is **one-sided** — 2.5e-03 at dt = 0.
 falling as RK4 truncation should — so it accumulates monotonically rather than
 averaging out, and an un-normalised quaternion silently stops representing a
 pure rotation.
+
+The viewer entry for this day sharpened one result and corrected another.
+Reading the angular velocity in the wrong frame turns out to be **exactly**
+invisible, not merely nearly so, on a whole family of test cases: a body rate
+composes onto the right of the initial attitude and an inertial rate onto the
+left, so the two agree bit-for-bit whenever those commute — a zero rate, an
+upright start, or a rate parallel to the axis the vehicle is already tilted
+about. Every planar case this project has run is in that family. Only a tumble
+started from a tilt about a different axis separates them, by **28.1°**. That
+also means `demo_3d_kinematics`' tilted-axis experiment does not isolate the
+frame, since it varies the rate vector too; the correction is recorded in
+[LOG.md](LOG.md).
 
 ### IMU bias: estimating the sensor's own error (Day 12)
 

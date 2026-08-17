@@ -913,6 +913,9 @@ _X hours_
 - `tests/test_quaternion.py`: 7 groups
 - `src/demo_3d_kinematics.py`: two figures and the four experiments
 - `results/day13_tumble.png`, `day13_gimbal_lock.png`
+- `attitude-3d` added to the viewer (fourteen problems) — the first entry with
+  no optimiser behind it and no landing to fly. Building it turned up the
+  correction below.
 
 First day that leaves the planar model behind. Deliberately kinematics only —
 no inertia tensor, no forces, no torques — because every three-dimensional bug
@@ -967,6 +970,27 @@ Feeding angular velocity in the wrong frame is invisible for a single-axis
 spin — 50.60 deg either way — and wrong once the axis tilts: 31.96 deg against
 50.61. That is precisely why a frame bug survives a test suite built on planar
 motion, which is the suite this project has had for twelve days.
+
+> **Correction, added while building the Day 13 viewer entry.** The tilted half
+> of that experiment does not show what I said it did. It compares a body rate
+> of (0.7, 0, 0.9) against an *inertial* rate of (0, 0, 0.9) — two different
+> rate vectors — so the 31.96-against-50.61 difference mixes the frame with the
+> vector and does not isolate the frame at all. The single-axis half stands.
+>
+> Holding the vector fixed and changing only how it is read gives a sharper
+> result than the one I claimed. A body rate composes onto the **right** of the
+> initial attitude and an inertial rate onto the **left**, so the two readings
+> are not merely similar on easy cases — they are bit-for-bit identical
+> whenever those commute. That rules out three whole families: a zero rate, an
+> upright start, and a rate parallel to the axis the vehicle is already tilted
+> about. Three of the four scenarios in the viewer entry are in that family, as
+> is every planar case this project has ever run. Only a tumble started from a
+> tilt about a different axis separates them, and it does so by **28.1 deg**.
+>
+> So the conclusion survives and gets stronger — a frame bug is invisible to
+> the obvious test cases — but the mechanism is commutation, not
+> single-versus-multi-axis, and the original experiment could not have
+> established it.
 
 ### Honest limitation
 This is bookkeeping, not physics. Nothing here computes a force, and the
