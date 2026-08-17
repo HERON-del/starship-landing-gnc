@@ -903,6 +903,83 @@ _X hours_
 
 ---
 
+## Day 13 — 2026-08-18
+
+### Done
+- `src/quaternion.py`: Hamilton algebra, DCM and Euler bridges, kinematics,
+  with the convention stated once and used everywhere
+- `src/dynamics_3d_kinematics.py`: the 13-state kinematic model, RK4 with
+  mandatory renormalisation
+- `tests/test_quaternion.py`: 7 groups
+- `src/demo_3d_kinematics.py`: two figures and the four experiments
+- `results/day13_tumble.png`, `day13_gimbal_lock.png`
+
+First day that leaves the planar model behind. Deliberately kinematics only —
+no inertia tensor, no forces, no torques — because every three-dimensional bug
+from here on will be a frame confusion or a sign error, and those are far
+easier to find in a model whose answers can be checked against closed-form
+rotations than in one where the forces are also in question.
+
+### Gimbal lock, measured rather than described
+The interesting number came out of rewriting a test that was asserting the
+wrong thing. Flying a perfectly smooth rotation at a constant **0.6 rad/s**
+straight through pitch = 90 degrees, the rate the Euler description demands
+peaks at **1570.8 rad/s — 2618x the physical rate** — while the quaternion
+path shows no discontinuity anywhere along the same trajectory. That ratio is
+what would actually break a controller reading angles, and it is why the rest
+of this project will store a quaternion.
+
+My first version of that test probed the singularity statically, perturbing
+roll and yaw by 1e-6 at a fixed pitch. It measured a ratio of 1.0, because at
+that pitch `quat_to_euler` had already switched to its locked branch — the
+probe was sitting inside the singularity rather than approaching it. The
+failure is dynamic and had to be measured dynamically.
+
+### The other correction
+The renormalisation test asserted the norm drifts without it. At `dt = 0.01`
+it does not, to nine decimal places, and asserting otherwise would have been
+overclaiming to make a point. Measured across step sizes the drift is
+**2.5e-03 at dt=0.5, 2.6e-05 at 0.2, 2.6e-08 at 0.05 and 8.2e-12 at 0.01** —
+RK4 truncation error, shrinking with the step as it should. The honest
+argument for renormalising is not that the solution falls apart quickly but
+that the error is **one-sided**: it accumulates monotonically rather than
+averaging out, so it only ever grows, and an un-normalised quaternion silently
+stops representing a pure rotation.
+
+### Key results
+- Sandwich product and rotation matrix agree to **9.5e-16** over 300 random
+  cases — two different derivations, so this is the real check that both treat
+  the quaternion as body-to-inertial.
+- Round trips through the matrix are exact to **0.0 deg**, and 155 of 300
+  returned `-q` rather than `q`. That is double cover, not a bug, and the
+  comparison helper checks up to sign for exactly this reason.
+- **The 3-D model reduces to Day 5's planar case exactly**: a single-axis spin
+  matches the closed form to 0.0 deg over 10 s, yaw advances linearly at
+  omega, and nothing leaks into the other two quaternion components. Days 1-12
+  all rest on the planar model, so a 3-D layer that disagreed would have put
+  them in question.
+- Day 5's 70 degree flip, expressed as a relative quaternion, comes out at
+  **70.0000 deg** about the expected axis and flies to vertical with zero
+  residual.
+
+### The experiment worth keeping
+Feeding angular velocity in the wrong frame is invisible for a single-axis
+spin — 50.60 deg either way — and wrong once the axis tilts: 31.96 deg against
+50.61. That is precisely why a frame bug survives a test suite built on planar
+motion, which is the suite this project has had for twelve days.
+
+### Honest limitation
+This is bookkeeping, not physics. Nothing here computes a force, and the
+angular acceleration is prescribed rather than derived, so none of it can be
+wrong in an interesting aerodynamic way yet. Day 14's Euler equations are
+where the inertia tensor arrives and where these conventions get their first
+real test.
+
+### Time spent
+_X hours_
+
+---
+
 ## Day 12 — 2026-08-17
 
 ### Done

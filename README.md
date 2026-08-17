@@ -107,6 +107,7 @@ published results in the trajectory-optimization literature.
 | Day 10 | Closed-loop guidance: warm-started replanning | done |
 | Day 11 | Navigation: sensors and an Extended Kalman Filter | done |
 | Day 12 | IMU bias estimation by state augmentation | done |
+| Day 13 | Quaternion attitude and 3-D kinematics | done |
 | Week 1 | 3-DoF convex powered descent, glideslope + tilt cones | done |
 | Week 2 | Sequential Convex Programming (SCvx) solver | done |
 | Week 3 | 6-DoF rigid-body dynamics with quaternions | |
@@ -117,6 +118,39 @@ published results in the trajectory-optimization literature.
 ---
 
 ## Results so far
+
+### Quaternions: leaving the plane (Day 13)
+
+Twelve days of work rested on a single pitch angle, which is enough only while
+the vehicle rotates about one axis. In 3-D, orientation is a point in SO(3),
+and three unconstrained numbers cannot cover it without a singularity.
+
+![Gimbal lock](results/day13_gimbal_lock.png)
+
+Flying a perfectly smooth rotation at a constant **0.6 rad/s** straight through
+pitch = 90°, the rate the Euler description demands peaks at **1570.8 rad/s —
+2618× the physical rate** — while the quaternion path shows no discontinuity
+anywhere along the same trajectory. That ratio is what would break a controller
+reading angles, and it is the whole argument for the representation.
+
+The library is verified against things with known answers: the sandwich product
+and the rotation matrix agree to 9.5e-16 across 300 random cases (two separate
+derivations, so this is the real convention check), round trips are exact, and
+155 of 300 came back as `-q` — double cover, not a bug.
+
+**It reduces to the planar model exactly.** A single-axis spin matches the
+closed form to 0.0° over 10 s, and Day 5's 70° flip expressed as a relative
+quaternion comes out at 70.0000° about the expected axis. Days 1–12 all rest on
+the planar model, so a 3-D layer that disagreed would have put them in question.
+
+![Free tumble](results/day13_tumble.png)
+
+Renormalisation after every RK4 step is mandatory, though not for the reason
+usually given: at dt = 0.01 the norm drift is 8.2e-12 over a minute, which is
+negligible. It matters because the error is **one-sided** — 2.5e-03 at dt = 0.5,
+falling as RK4 truncation should — so it accumulates monotonically rather than
+averaging out, and an un-normalised quaternion silently stops representing a
+pure rotation.
 
 ### IMU bias: estimating the sensor's own error (Day 12)
 
@@ -580,6 +614,8 @@ src/
   navigation_loop.py   guidance flown on the estimate, and its baselines (Day 11)
   imu_bias.py          the true gyro bias, and the sensor that carries it (Day 12)
   ekf_bias.py          the filter with the bias promoted to a state (Day 12)
+  quaternion.py        Hamilton algebra, DCM and Euler bridges (Day 13)
+  dynamics_3d_kinematics.py  13-state 3-D kinematic model (Day 13)
   gnc/
     types.py           Param + Trajectory contracts shared by solver and viewer
     registry.py        problem plugin registry
