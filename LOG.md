@@ -903,6 +903,132 @@ _X hours_
 
 ---
 
+## Day 16 — 2026-08-18
+
+### Done
+- `src/scvx_3d.py`: the 14-state 3-D SCvx sub-problem — exact-convex thrust,
+  gimbal, torque and glideslope; linearised quaternion kinematics, gyroscopic
+  coupling and rotated thrust; aero as a reference-iteration perturbation;
+  trust regions and virtual control over the full state; plus a replay harness
+  that flies the answer through Day 15's true model
+- `tests/test_scvx_3d.py`: 8 groups, all passing
+
+**The solver does not converge.** That is the headline and it is recorded here
+rather than buried. Everything that can be verified about the convex
+sub-problem checks out; the outer loop does not drive its own dynamics defect
+to tolerance, so what comes out is a plan, not a trajectory.
+
+### What is verified
+Every linearisation, against finite differences:
+
+| piece | check | worst error |
+|---|---|---|
+| Hamilton L(q), R(p) | vs `quat_multiply`, 400 pairs | **1e-12** |
+| dR/dq, all four | central differences of the raw form | **2.82e-10** |
+| gyroscopic Jacobian | central differences, relative | **1.65e-09** |
+| quaternion kinematics | exact at the reference | **5.55e-17** |
+| `force_to_gimbal` | round-trips Day 14's trig, 500 commands | **2.22e-16** |
+
+The quaternion-kinematics expansion also halves-to-a-quarter correctly — the
+error divides by 4.00 each time the step is halved, which is what a product
+rule applied to a bilinear term must do, and a stronger statement than a
+single-point check.
+
+The exact-convex set holds in the returned solution: gimbal peaks at 13.2 deg
+of 15, glideslope at 60.3 deg of 80, thrust inside [T_min, T_max] throughout.
+Boundary conditions are met to **2.5e-09 m** and **1.9e-09 m/s**, upright to
+0.00 deg, with 8,970 kg of the 30,000 kg propellant load.
+
+### What is not
+Virtual control stalls at **4.16e-01** against a tolerance of 1e-6. Replaying
+the plan through the true Day 15 model misses by **247 m at 14.4 m/s**.
+
+Two obvious causes, both ruled out by measurement rather than argument:
+
+- **Not the Euler step.** The miss does not fall with node count: 141 m at
+  N=15, 247 at 25, 418 at 40, 240 at 60, 417 at 90. No trend, and the
+  qualitatively different outcomes (some runs land at 14 m/s and 18 deg, others
+  at 120 m/s and 170 deg) say the solver is finding different local answers
+  rather than refining one.
+- **Not an under-sized trust region.** The defect *falls* as the radius grows —
+  0.557 at eta = 0.2, 0.416 at 0.5, 0.310 at 1.0. A linearisation-validity
+  problem has the opposite signature.
+
+What it looks like is an **over-constrained sub-problem**. Hard terminal
+equalities on all four state blocks, a 40 per cent throttle floor that puts
+minimum deceleration at 21 m/s^2 against gravity's 9.8, and a fixed horizon.
+The solver pays slack because it cannot meet them simultaneously. Lengthening
+the horizon eases the defect without improving the replay — 0.42 at 8 s, 0.26
+at 11 s, 0.18 at 14 s, miss stuck near 250 m — which fits that reading and
+fits nothing else I tried.
+
+Next thing to try, in order: free final time (Day 8's extension, which this day
+deliberately dropped), then terminal conditions as penalties rather than hard
+equalities.
+
+### Two things the sub-problem needed that the guide does not have
+- **Variable scaling.** Without it the problem spans seven orders of magnitude
+  — position in thousands of metres, quaternion components of order one, mass
+  1e5, force 1e6 — and CLARABEL returns `optimal_inaccurate` answers whose
+  quaternion norm has wandered to **2.79**. Scaling every block to order one
+  took the drift to 2.8e-03 and the solve from 277 s to 55 s. Day 7 needed the
+  same thing for the 2-D solver.
+- **A linearised unit-norm constraint.** `||q|| = 1` is non-convex, but about a
+  unit reference it is the affine tangent plane `q_ref . q = 1`. Nothing in the
+  guide's sub-problem stops the quaternion leaving the sphere, and it does —
+  which is worse than it sounds, because every linearisation in the file is
+  built on a unit q, so off the sphere the dynamics become free and the solver
+  helps itself. One line took the drift from 2.8e-03 to 4.5e-04.
+
+### Three defects in the guide
+- **The terminal quaternion is the belly-flop, not upright.** The guide sets
+  `q[N] == [1, 0, 0, 0]` and calls it "upright at landing". The identity
+  quaternion means the body frame equals the inertial frame, so with the long
+  axis on body +x the thrust points along inertial +x — horizontal. A vehicle
+  in that attitude cannot hover. Both boundary attitudes here go through Day
+  14's `attitude_from_pitch` instead, which is the one place that convention
+  lives.
+- **A silent rate limit.** The guide writes
+  `cp.norm(omega, axis=1) <= vehicle.omega_max if hasattr(...) else True`.
+  Python binds that as `<= (omega_max if hasattr else True)`, and `Vehicle3D`
+  has no `omega_max`, so the constraint quietly becomes `<= 1` rad/s. Stated
+  explicitly as a named parameter.
+- **The dR/dq test as described would fail.** The guide's Test 1 checks the
+  Jacobians against "finite-difference derivatives of the actual rotation
+  matrix". Day 13's `quat_to_rotmatrix` normalises its argument, so it is not
+  the function being linearised — the two agree to 1e-15 in value and their
+  derivatives do not agree at all, because normalising projects out the radial
+  direction. Differencing it misses by **1.26**. The matrices themselves are
+  correct; the test is the trap. `rotmatrix_unnormalized` exists to make the
+  distinction explicit, and Test 2 asserts both that the right check passes and
+  that the wrong one fails.
+
+Also: the guide's solver map has only ECOS and SCS, and `SCvxParams.solver` is
+CLARABEL, so every solve would silently fall through to SCS.
+
+### A bug in my own loop
+The trust radius shrinks on a rejected step, and I had no `eta_min` exit on the
+accepted path — so once it collapsed, the trust region pinned the iterate to
+its own reference for every remaining iteration and printed thirty rows of an
+unchanging number. That reads like convergence and is the opposite of it. Fixed
+with an explicit break and a message that says what happened.
+
+### Honest scope note
+The guide's own reduction — fixed final time, Euler discretisation, raw mass —
+is stated as deliberate, and it is defensible on a day this large. But the
+evidence above points at the fixed horizon as part of what is blocking
+convergence, so that reduction is not free, and Day 17 should probably take
+free final time back before anything else.
+
+### Tomorrow (Day 17)
+Free final time in 3-D, or soft terminal constraints — whichever relieves the
+defect. Not the benchmark comparison until the solver converges.
+
+### Time spent
+_X hours_
+
+---
+
 ## Day 15 — 2026-08-18
 
 ### Done

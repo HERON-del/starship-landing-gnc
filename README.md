@@ -120,6 +120,7 @@ published results in the trajectory-optimization literature.
 | Day 13 | Quaternion attitude and 3-D kinematics | done |
 | Day 14 | 3-D rigid-body dynamics: Euler's equations, two-axis gimbal | done |
 | Day 15 | 3-D aerodynamics: angle of attack, sideslip, aero moments | done |
+| Day 16 | 3-D SCvx solver: convex sub-problem built, not converging | partial |
 | Week 1 | 3-DoF convex powered descent, glideslope + tilt cones | done |
 | Week 2 | Sequential Convex Programming (SCvx) solver | done |
 | Week 3 | 6-DoF rigid-body dynamics with quaternions | |
@@ -130,6 +131,50 @@ published results in the trajectory-optimization literature.
 ---
 
 ## Results so far
+
+### The 3-D SCvx solver, and where it stops (Day 16)
+
+Days 13–15 built the 3-D physics. This turns it into something a convex solver
+can optimise over: the full 14-state sub-problem, with trust regions and
+virtual control.
+
+**The parameterisation is the whole trick.** Making the decision variable the
+body-frame thrust *force vector* rather than a magnitude and two angles leaves
+four things exactly convex, with no linearisation anywhere near them —
+`‖F‖ ≤ σ`, the gimbal cone `‖(Fy,Fz)‖ ≤ Fx·tan δ_max`, the torque
+`τ = [0, L·Fz, −L·Fy]` (linear in F), and the 3-D glideslope. Day 14 found by
+sweeping 10,201 deflection pairs that this gimbal cannot roll the vehicle; here
+that is not a finding at all, just the cross product with a fixed body-x vector
+having no x component.
+
+**Every linearisation is verified against finite differences.** Hamilton
+matrices to 1e-12, `dR/dq` to 2.8e-10, the gyroscopic Jacobian to 1.7e-09, and
+the quaternion-kinematics expansion exact at the reference with error that
+divides by **4.00** each time the step is halved — the signature a product rule
+on a bilinear term must have. Boundary conditions come out at 2.5e-09 m and
+1.9e-09 m/s, upright, inside every cone.
+
+**And it does not converge.** Virtual control stalls at **0.42** against a
+tolerance of 1e-6, so the plan satisfies its own dynamics only by paying slack.
+Flown through Day 15's true model it misses by **247 m**. Two obvious causes
+were ruled out by measurement: it is not the Euler step (the miss shows no
+trend with node count — 141 m at N=15, 247 at 25, 418 at 40, 240 at 60, 417 at
+90) and it is not an under-sized trust region (the defect *falls* as the radius
+grows, 0.557 → 0.416 → 0.310, which is the opposite signature). What fits is an
+over-constrained sub-problem: hard terminal equalities on all four state
+blocks, a 40% throttle floor putting minimum deceleration at 21 m/s² against
+gravity's 9.8, and a fixed horizon. `tests/test_scvx_3d.py` asserts the failure
+so it cannot regress unnoticed, and there is no viewer entry for this day —
+publishing a 3-D trajectory that is not dynamically feasible would be the wrong
+thing to put on the site.
+
+Two things the sub-problem needed that the guide does not have: **variable
+scaling** (without it the problem spans seven orders of magnitude and the
+quaternion norm wanders to 2.79 while the solver reports success) and a
+**linearised unit-norm constraint** — `‖q‖ = 1` is non-convex, but about a unit
+reference it is the affine tangent plane `q_ref·q = 1`, and without it nothing
+keeps the quaternion on the sphere where every linearisation in the file is
+defined.
 
 ### 3-D aerodynamics, and what a crosswind actually does (Day 15)
 
@@ -757,6 +802,7 @@ src/
   dynamics_3d_kinematics.py  13-state 3-D kinematic model (Day 13)
   dynamics_3d.py       14-state rigid body: Euler's equations, gimbal (Day 14)
   aero_3d.py           3-D aero: alpha, beta, forces and moments (Day 15)
+  scvx_3d.py           14-state 3-D SCvx sub-problem (Day 16)
   gnc/
     types.py           Param + Trajectory contracts shared by solver and viewer
     registry.py        problem plugin registry
