@@ -209,7 +209,7 @@ def gyroscopic_term(omega, I_body):
 # Dynamics
 # ======================================================================
 def dynamics_3d_derivative(s, T_mag, delta_y, delta_z, vehicle,
-                           include_gyro=True):
+                           include_gyro=True, extra_body_wrench=None):
     """
     The 14-state derivative: thrust and gravity, Euler's rotational equations
     with gyroscopic coupling, and mass depletion.
@@ -217,6 +217,13 @@ def dynamics_3d_derivative(s, T_mag, delta_y, delta_z, vehicle,
     `include_gyro=False` drops the coupling term. That is not a physical model
     -- it exists so the term's actual contribution can be measured by
     difference instead of argued about.
+
+    `extra_body_wrench(s) -> (F_body, tau_body)` adds any further body-frame
+    force and torque before the equations are solved. It exists so Day 15's
+    aerodynamics can be a layer on top of this file rather than a second copy
+    of it: gravity, the rotation into the inertial frame, Euler's equations and
+    the mass flow all stay here, with exactly one implementation guarded by
+    exactly one test suite.
     """
     s = np.asarray(s, dtype=float)
     q = s[IDX_QUAT]
@@ -225,6 +232,10 @@ def dynamics_3d_derivative(s, T_mag, delta_y, delta_z, vehicle,
 
     F_body, tau_body = gimbal_force_and_torque_body(
         T_mag, delta_y, delta_z, vehicle)
+    if extra_body_wrench is not None:
+        F_extra, tau_extra = extra_body_wrench(s)
+        F_body = F_body + F_extra
+        tau_body = tau_body + tau_extra
 
     R = quat_to_rotmatrix(q)
     F_thrust_inertial = R @ F_body
@@ -247,11 +258,12 @@ def dynamics_3d_derivative(s, T_mag, delta_y, delta_z, vehicle,
 
 
 def rk4_step_3d_dynamics(s, T_mag, delta_y, delta_z, dt, vehicle,
-                         include_gyro=True):
+                         include_gyro=True, extra_body_wrench=None):
     """One RK4 step, then renormalise the quaternion and floor the mass."""
     def f(state):
         return dynamics_3d_derivative(state, T_mag, delta_y, delta_z, vehicle,
-                                      include_gyro=include_gyro)
+                                      include_gyro=include_gyro,
+                                      extra_body_wrench=extra_body_wrench)
 
     k1 = f(s)
     k2 = f(s + 0.5 * dt * k1)
@@ -264,7 +276,7 @@ def rk4_step_3d_dynamics(s, T_mag, delta_y, delta_z, dt, vehicle,
 
 
 def propagate_3d_dynamics(s0, control_fn, t_span, dt, vehicle,
-                          include_gyro=True):
+                          include_gyro=True, extra_body_wrench=None):
     """
     Propagate the 14-state model.
 
@@ -282,7 +294,7 @@ def propagate_3d_dynamics(s0, control_fn, t_span, dt, vehicle,
         T_mag, delta_y, delta_z = control_fn(t_hist[k], s_hist[k])
         s_hist[k + 1] = rk4_step_3d_dynamics(
             s_hist[k], T_mag, delta_y, delta_z, dt, vehicle,
-            include_gyro=include_gyro)
+            include_gyro=include_gyro, extra_body_wrench=extra_body_wrench)
         t_hist[k + 1] = t0 + (k + 1) * dt
     return t_hist, s_hist
 

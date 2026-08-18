@@ -32,8 +32,11 @@ glance. The translucent cone is the glideslope corridor.
 | **Export** | full run as JSON — parameters plus trajectory |
 | **Re-solve** | `r`, or automatically on any control change |
 
-Fifteen problems are registered — one per day of work, plus the Week 1 3-DoF
-optimiser. The Day 14 entry carries a switch for the gyroscopic coupling term:
+Sixteen problems are registered — one per day of work, plus the Week 1 3-DoF
+optimiser. The Day 15 entry flies the same descent in still air and in a
+crosswind with the yaw gimbal pinned at zero, so you can watch a degree of
+freedom the planar model never had start moving on its own. The Day 14 entry
+carries a switch for the gyroscopic coupling term:
 at zero roll rate the two settings are bit-for-bit identical, and a nudge of
 roll separates them by tens of degrees over a six-second burn. The Day 13 entry
 is the only one with no optimiser behind it and no
@@ -116,6 +119,7 @@ published results in the trajectory-optimization literature.
 | Day 12 | IMU bias estimation by state augmentation | done |
 | Day 13 | Quaternion attitude and 3-D kinematics | done |
 | Day 14 | 3-D rigid-body dynamics: Euler's equations, two-axis gimbal | done |
+| Day 15 | 3-D aerodynamics: angle of attack, sideslip, aero moments | done |
 | Week 1 | 3-DoF convex powered descent, glideslope + tilt cones | done |
 | Week 2 | Sequential Convex Programming (SCvx) solver | done |
 | Week 3 | 6-DoF rigid-body dynamics with quaternions | |
@@ -126,6 +130,56 @@ published results in the trajectory-optimization literature.
 ---
 
 ## Results so far
+
+### 3-D aerodynamics, and what a crosswind actually does (Day 15)
+
+Day 6's aero was a single drag force with the reference area blended by one
+pitch angle. This generalises it: angle of attack **and** sideslip, a
+drag/lift/side-force decomposition, and — genuinely new — aerodynamic
+**moments**, computed with the same `r × F` pattern as Day 14's engine torque.
+Built as a layer on Day 14 rather than a copy of it: the combined derivative
+equals Day 14's plus exactly the aerodynamic wrench, to **6.94e-18**.
+
+![Crosswind descent](results/day15_crosswind.png)
+
+**The crosswind result is not the obvious one.** Hold the yaw gimbal at exactly
+zero, add a lateral wind, and the vehicle ends **393 m out of plane**. It looks
+like the aerodynamic side force pushed it there. Splitting the out-of-plane
+impulse says otherwise — aerodynamics contributed **+4.56 MN·s** downwind, and
+*thrust* contributed **−13.89 MN·s** upwind, three times larger. The first two
+seconds drift downwind under the side force alone; by then the aerodynamic yaw
+moment has swung the body about **20°** out of plane, and 4.8 MN of thrust
+pointed 20° wrong overwhelms every aerodynamic force in the model. The vehicle
+finishes hundreds of metres **upwind, carried there by its own engine**.
+
+So what 3-D aero adds is not a correction to the planar answer. It is that the
+wind can *turn* the vehicle and the engine then does the damage — a control
+problem, which the planar model cannot express at all.
+
+![Day 6 gap](results/day15_day6_gap.png)
+
+**Two defects found, one fixed.** The guide's lift direction is backwards: at
+small angle of attack it overwhelms the drag's own normal component and turns
+the vehicle *away* from the wind, which would make a centre of pressure aft of
+the centre of mass destabilising — an arrow flying backwards. Corrected, and
+checked end to end: with `x_cp` aft the moment is restoring at every angle of
+attack tested, with `x_cp` forward it diverges at every one. Day 6 already had
+this right, and with the fix the full 3-D force reproduces Day 6's planar force
+to **2.13e-15** for vertical descent at any pitch angle.
+
+The one not fixed is in Day 6 itself. It blends area and drag coefficient by
+pitch from *vertical*, when what decides how much vehicle the air sees is the
+angle to the *relative wind* — and it is inconsistent internally, computing the
+wind-relative angle correctly for lift and then using the vertical one for
+drag. The blend formula is identical; only the angle differs. The error is
+**not one-directional**: Day 6 gives **2.0×** too little drag area at 30° of
+pitch and **0.73×** too much at 90°, so it cannot be waved through as a
+conservative margin. Left in place — `aero.py` carries Days 6 to 12 — and
+asserted in `tests/test_aero_3d.py` so it cannot drift unnoticed.
+
+**Known limitation:** there is a restoring moment but no aerodynamic damping,
+so a disturbed vehicle oscillates about the wind direction forever instead of
+settling. Day 16's solver should not read that as physical.
 
 ### 3-D rigid-body dynamics, and a sign error in Day 5 (Day 14)
 
@@ -702,6 +756,7 @@ src/
   quaternion.py        Hamilton algebra, DCM and Euler bridges (Day 13)
   dynamics_3d_kinematics.py  13-state 3-D kinematic model (Day 13)
   dynamics_3d.py       14-state rigid body: Euler's equations, gimbal (Day 14)
+  aero_3d.py           3-D aero: alpha, beta, forces and moments (Day 15)
   gnc/
     types.py           Param + Trajectory contracts shared by solver and viewer
     registry.py        problem plugin registry

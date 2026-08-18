@@ -903,6 +903,163 @@ _X hours_
 
 ---
 
+## Day 15 — 2026-08-18
+
+### Done
+- `src/aero_3d.py`: angle of attack and sideslip, area and drag-coefficient
+  blending by the angle to the *relative wind*, a drag/lift/side-force
+  decomposition, aerodynamic moments through the same `r x F` pattern as
+  Day 14's engine torque, and a combined dynamics layer
+- `tests/test_aero_3d.py`: 11 groups, all passing
+- `src/demo_aero_3d.py`: three figures and five experiments
+- `results/day15_coefficients.png`, `day15_crosswind.png`, `day15_day6_gap.png`
+- `src/dynamics_3d.py`: an `extra_body_wrench` hook, so today is a layer on
+  Day 14 rather than a second copy of it
+- `aero-3d` added to the viewer (sixteen problems)
+
+### Composition, not duplication
+The guide's Day 15 rebuilds the whole 14-state derivative — gravity, the
+body-to-inertial rotation, Euler's equations, the mass flow — inside a new
+`dynamics_3d_with_aero_derivative`. That is a second copy of the physics that
+Day 14's test suite guards, free to drift away from it silently.
+
+Instead `dynamics_3d_derivative` gained one optional argument: a callable
+returning an extra body-frame force and torque. Day 15 supplies the aerodynamic
+wrench and nothing else. The test asserts the combined derivative equals Day
+14's plus exactly that wrench — measured at **6.94e-18** — and that switching
+aero off reproduces Day 14 bit for bit. Given what the Day 14 reduction check
+turned up in `dynamics_6dof` and `landing_flip`, two copies of the same physics
+is the last thing this project needs.
+
+### The guide's lift direction is backwards, and it is decidable
+The guide specifies the lift direction as `[-w, 0, u]` in body coordinates.
+That is perpendicular to the wind, which is the part that is derivable, but the
+sign is wrong and it is not a matter of convention.
+
+At positive angle of attack the vehicle is moving in `+z` relative to the air,
+so the air pushes it in `-z`. The drag term already carries part of that. The
+perpendicular component has to keep pushing the same way, not against it. With
+the guide's sign, lift at small angle of attack **overwhelms the drag's own
+normal component** and the net force turns the vehicle *away* from the wind —
+which makes a centre of pressure aft of the centre of mass destabilising. An
+arrow with its fletching at the back would fly backwards.
+
+Corrected to `[w, 0, -u]`. The end-to-end check is Test 11: with `x_cp` aft the
+moment is restoring at all six angles of attack tested, and with `x_cp` forward
+it diverges at all six. Before the fix, both were diverging.
+
+**Day 6 already had it right.** With the correction, the full 3-D force —
+drag and lift together — reproduces Day 6's planar force to **2.13e-15**
+relative for vertical descent at every pitch angle from 0 to 90 degrees. Before
+the fix the magnitudes matched exactly and the directions were **49.58 degrees**
+apart, which is what a flipped lift looks like when drag and lift are
+orthogonal: the magnitude cannot see it.
+
+### A second defect in Day 6, and this one is not fixed
+Day 6 blends reference area and drag coefficient by `theta`, the pitch from
+*vertical*. The quantity that decides how much vehicle the air sees is the
+angle between the body axis and the *relative wind*. Those coincide only when
+the wind is vertical.
+
+Day 6 is inconsistent about it internally, too: `angle_of_attack()` computes
+the wind-relative angle correctly and uses it for lift, and then
+`effective_area()` and `effective_Cd()` use the vertical-relative angle for
+area and drag.
+
+The blend *formula* is identical — fed the same angle the two agree to
+**0.00e+00**. The entire disagreement is which angle goes in.
+
+| pitch | velocity off vertical | Day 6 CdA | true CdA | ratio |
+|---|---|---|---|---|
+| 70° | 0° | 488.9 | 488.9 | 1.000 |
+| 70° | 20° | 488.9 | 540.0 | 1.105 |
+| 70° | 45° | 488.9 | 461.7 | 0.944 |
+| 30° | 24° | 192.6 | 386.8 | **2.008** |
+| 90° | 35° | 540.0 | 394.3 | **0.730** |
+
+**The error is not one-directional**, which is the awkward part. Day 6 gives
+the vehicle too much drag in some of the envelope and half what it should in
+other parts, so it cannot be waved through as a conservative margin. It is a
+bias whose sign depends on where the vehicle is — exactly the kind of thing an
+optimiser finds and exploits. Over a full unpowered descent from 6 km the ratio
+averages 1.04x and reaches 4.28x at worst.
+
+Not fixed. `aero.py` is load-bearing for Days 6 to 12 — the aero entry, the
+two-phase descent, the SCvx aero ramp, Monte Carlo, the closed loop. Same
+decision as yesterday's sign error, and the same reason.
+
+### The crosswind result is not the one I expected
+Set a crosswind with a lateral component, hold the yaw gimbal at exactly zero,
+and the vehicle ends **393 m out of plane**. The obvious reading is that the
+aerodynamic side force pushed it there. Splitting the out-of-plane impulse says
+otherwise:
+
+- aerodynamic: **+4.56 MN·s**, downwind, as expected
+- thrust: **−13.89 MN·s**, upwind, three times larger
+
+The first two seconds do drift downwind under the side force alone. By then the
+aerodynamic yaw moment has swung the body about **20 degrees** out of plane,
+and 4.8 MN of thrust pointed 20 degrees wrong overwhelms every aerodynamic
+force in the model. The vehicle finishes hundreds of metres **upwind**, carried
+there by its own engine.
+
+So the thing 3-D aero adds is not a correction to the planar answer. It is that
+the wind can *turn* the vehicle, and the engine then does the damage. That is a
+control problem rather than an aerodynamic one, and the planar model cannot
+express it at all.
+
+### Other results
+- Purely axial flow gives no side force, no lift and no moment, to
+  **3.27e-16** relative — the same geometry as Day 14's zero-gimbal result, a
+  force collinear with the offset arm has no moment about it.
+- Broadside flow reproduces Day 6's belly values exactly.
+- Doubling the relative speed multiplies the force by **4.000000000000** and
+  does not rotate it by a microradian; the coefficients depend on direction
+  alone.
+- Force scales with density as it should — the sea-level to 8500 m ratio is
+  **2.7183**, which is `e`, one scale height.
+- Best lift-to-drag is **0.46 at 31.8 degrees**, not at the 45 degrees where
+  the lift coefficient peaks, because the drag coefficient is still climbing
+  there. A falling cylinder is not a wing.
+- Aero cannot roll this vehicle either — `r x F` with `r` along the long axis,
+  worst roll moment 0.00e+00 over 500 random forces. Neither can the gimbal.
+  The roll axis has no authority from any source in the model.
+
+### Problems hit
+- Four of my own test assertions were wrong on the first run. Two were absolute
+  tolerances of 1e-12 applied to residues of `sin(2*pi)` on forces of order
+  1e5 N; rewritten as relative tolerances, and they now read 3.27e-16. One had
+  the cross-product signs transposed. The fourth asserted weathervaning by
+  propagating for 25 s and reading the final angle, which conflates the
+  restoring moment with an undamped oscillation — replaced by checking the sign
+  of the moment at a perturbed angle of attack, which needs no integration and
+  is decisive.
+- The guide's claim that "Day 6 had no lift term at all" is simply wrong.
+  `aero.py` has `Cl_max = 0.4` and the same `Cl_max sin(2 alpha)` curve. What
+  Day 6 genuinely lacks is sideslip, a side force, and any moment whatsoever.
+
+### Honest limitation
+There is a restoring moment but **no aerodynamic damping** — no moment
+proportional to body rate. A disturbed vehicle therefore oscillates about the
+wind direction forever instead of settling. Day 16's solver should not read
+that oscillation as physical. Adding a rate-damping term is a small change and
+probably belongs before any controller is tuned against this model.
+
+The centre of pressure is also a single fixed point, which real aerodynamics
+does not have — it moves with angle of attack and Mach number. And `x_cp`
+being aft, making the vehicle passively stable, is a *choice*: a real Starship
+in the belly-flop is not passively stable, which is why it carries flaps.
+
+### Tomorrow (Day 16)
+3-D SCvx: linearising the quaternion kinematics, 3-D glideslope as a
+second-order cone, thrust pointing in 3-D, trust regions over the full 14-state
+vector — Days 13 to 15 combined into one convex subproblem.
+
+### Time spent
+_X hours_
+
+---
+
 ## Day 14 — 2026-08-18
 
 ### Done
