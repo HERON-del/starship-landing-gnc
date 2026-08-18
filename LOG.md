@@ -903,6 +903,184 @@ _X hours_
 
 ---
 
+## Day 14 — 2026-08-18
+
+### Done
+- `src/dynamics_3d.py`: `Vehicle3D` with a real inertia tensor, a two-axis
+  gimbal in exact trig, Euler's rotational equations with the gyroscopic
+  coupling term, RK4 with renormalisation, and the bridge functions that
+  express Day 5's single pitch angle as a quaternion
+- `tests/test_dynamics_3d.py`: 8 groups, all passing
+- `src/demo_3d_dynamics.py`: two figures and five experiments
+- `results/day14_poinsot_tumble.png`, `day14_gyroscopic.png`
+- `rigid-body-3d` added to the viewer (fifteen problems) — the gyroscopic
+  term as a switch, with the divergence against the other setting reported
+  on every solve
+
+Thrust and gravity only. Aero is Day 15, laid on top of a validated rigid body
+rather than built into it, which is the same order Day 6 used.
+
+### The headline: Euler's equations change nothing behind them, and everything ahead
+
+The gyroscopic term `omega x (I omega)` is the whole point of today, and the
+honest measurement of it is a bifurcation at zero rather than a smooth
+correction.
+
+At **exactly zero roll rate the term contributes exactly nothing** — flying the
+same burn with it included and with it dropped gives 0.0000 deg of attitude
+difference and 0.0000 m of position difference. That is not a small number, it
+is an identity: with omega on a single principal axis, omega and `I omega` are
+parallel, the cross product vanishes, and a pitch-axis torque never moves omega
+off that axis. This project's flip is roll-free, so **Euler's equations reduce
+to Day 5's scalar tau = I alpha exactly**, and none of Days 1–12 is affected by
+today's physics.
+
+Just above zero it stops being negligible immediately:
+
+| roll rate [rad/s] | \|w x Iw\| / tau_max | d attitude | d position |
+|---|---|---|---|
+| 0.00 | 0.00e+00 | 0.0000° | 0.000 m |
+| 0.02 | 1.63e-03 | 3.61° | 3.39 m |
+| 0.10 | 8.14e-03 | 18.07° | 16.89 m |
+| 0.50 | 4.07e-02 | 90.67° | 80.31 m |
+| 1.00 | 8.14e-02 | 146.00° | 136.53 m |
+| 10.00 | 8.14e-01 | 20.63° | 71.74 m |
+
+0.1 rad/s is under 6 deg/s of roll — nothing — and it moves the attitude 18
+degrees over a five-second burn. The divergence peaks near 1 rad/s and falls
+away beyond it, which is gyroscopic stiffening: a fast enough spin resists
+being turned at all.
+
+The uncomfortable part is that this vehicle **has no roll authority**. The
+gimbal torque is `r x F` with `r` along body x, so its x component is
+identically zero — swept over 10,201 deflection pairs at full thrust, the worst
+roll torque is 0.00e+00, and it is zero by construction rather than by
+tolerance. So the model can be *disturbed* into a roll it cannot remove, and
+the disturbance then costs 18 degrees of attitude per 6 deg/s. Real vehicles
+get roll control by throttling several engines differentially; this project has
+modelled the engines as one effective thruster since Day 2, and that is the
+choice that costs the axis.
+
+### A defect in Day 5, found by the reduction check
+
+The reduction test is the load-bearing one — Days 1–12 all rest on
+`dynamics_6dof`, so a 3-D layer that disagreed with it would put them in
+question. It disagrees.
+
+`dynamics_6dof` uses `Tx = T sin(theta + delta)` for the thrust tilt and
+`tau = +T L sin(delta)` for the torque. **Those two are not compatible.** Given
+that thrust convention, working out `r x F` with the engine at `r = -L b` gives
+`tau = -T L sin(delta)`. Day 5 has the opposite sign.
+
+Verified three independent ways:
+
+- a planar derivation written from vectors inside the test file, referencing
+  neither model: `-0.38977985 rad/s^2` for a +5 deg deflection
+- the new 3-D model, which agrees with it to **7.22e-16**
+- the physical check: deflecting the nozzle toward +x pushes the tail toward
+  +x, so the nose must go toward −x. Day 5 has the nose go toward +x.
+
+This is not a sign convention on `delta`. Flipping `delta`'s sign changes the
+thrust tilt as well, so no relabelling reconciles them — what is wrong is the
+*relative* sign between the tilt and the torque, and that is
+convention-independent.
+
+Consequence: in Day 5's model, gimballing to rotate the vehicle tilts the
+thrust the *same* way the vehicle is turning, so tilt and translation reinforce
+each other. In reality they fight — a gimballed rocket is non-minimum phase,
+and to translate one way you must first accelerate the other way. Day 5's own
+docstring states the difficulty correctly ("you cannot buy one without paying
+for the other") and then codes its opposite. Same entry state and same open-loop
+gimbal profile, the two models rotate the vehicle in opposite directions:
++232° against −91° after six seconds at 2 deg of deflection.
+
+**Why twelve days of tests did not catch it.** `landing_flip.py` carries the
+same pairing — its header states `Tx = sigma sin(theta + delta)` and
+`tau = sigma L sin(delta)`, and its linearisation is built on them. So the
+optimiser and the simulator agree with each other perfectly, and every
+verification in this project compares one against the other: the SCvx loop
+against the simulator, Monte Carlo against the simulator, the closed loop
+against the simulator, the EKF against the simulator. Nothing was ever compared
+against an independent derivation of the physics. Two mutually consistent
+models are indistinguishable from two correct ones until a third opinion turns
+up, and today's reduction check is the first third opinion this project has
+had.
+
+That is the transferable lesson, more than the sign itself: a self-consistent
+stack tests its own internal agreement, which is not the same thing as testing
+whether it is right.
+
+**Left unfixed today, deliberately.** `dynamics_6dof` is load-bearing for
+Days 5–12 — the flip optimiser, SCvx, the complete solver, Monte Carlo, the
+closed loop, the EKF, the bias filter, and eight viewer entries. Correcting it
+means re-deriving the linearisation in `landing_flip` as well as the simulator,
+then re-running everything downstream, which is a day of work in its own right
+and would invalidate published numbers. It is recorded here, asserted in `test_dynamics_3d.py` as an
+exact sign flip so it cannot drift unnoticed, and it is the first thing to
+decide about before Day 16 puts a solver on top of the 3-D model.
+
+Direction of the error, unquantified: Day 5's model is *easier* to control than
+a real vehicle, so the fuel numbers, the feasibility band and the landing
+accuracy reported on Days 5–12 are all likely optimistic. I have not re-run
+them to say by how much.
+
+### The checks that are theorems
+Torque-free rigid-body motion conserves two things exactly, and both are far
+stronger than any tuned tolerance:
+
+- **angular momentum as a vector in the inertial frame**: relative drift
+  **5.15e-12** over a 15 s tumble, direction fixed to 1.48e-06 deg — while the
+  body-frame omega swings **119 degrees** in body axes over the same run. That
+  second number is what gives the test teeth; a check on `|L|` alone would pass
+  with the rotation wired wrong.
+- **rotational kinetic energy**: relative drift **5.61e-15**.
+
+The guide's tolerances for these were `atol=1e-2` and `< 0.1%`. The first is
+worse than it looks — `np.allclose` applies its default `rtol=1e-5` to a
+quantity of order 1e7, so it would have accepted a drift of a hundred units
+while an `atol` of 1e-2 sat in the call looking strict. Both were rewritten as
+explicit relative tolerances, and the measured values beat them by ten orders
+of magnitude.
+
+### The tennis racket theorem, which nobody coded
+Break axisymmetry (`I_yaw = 1.3 I_pitch`) and spin the body about each
+principal axis in turn with a 1 per cent nudge off it. The minimum-inertia axis
+is stable, the maximum-inertia axis is stable, and the **intermediate axis
+flips completely** — the axis fraction runs from +1.0000 to −1.0000. Nothing in
+the code knows about this; it falls straight out of `omega x (I omega)`, which
+makes it about the best available check that the term is right.
+
+The axisymmetric body is the clean contrast: the precession cone's half-angle
+is **21.46 deg and never moves** (spread 0.00), while the tri-axial body's
+breathes between 14.80 and 28.46.
+
+### Problems hit
+- Test 6 as written in the guide recomputes `domega` inline with the same
+  formula it is testing, so it tests numpy rather than the code. Rewritten to
+  go through `dynamics_3d_derivative`, and extended: the roll decoupling has to
+  *disappear* when axisymmetry is removed, otherwise the check is passing for
+  the wrong reason. It does — the roll-axis gyroscopic term goes from 0.00e+00
+  to 2.43e+07.
+- The Poinsot figure's middle panel needs its axis limits set by hand. Left to
+  autoscale, matplotlib zooms in on a drift of one part in 1e12 and draws the
+  conserved vector as an impressive cloud — a plot that says the opposite of
+  the truth. Fixed at ±5% of `|L|`, it reads as the single point it is.
+
+### Honest limitation
+The inertia tensor is constant while the mass depletes. Burning 30 t of 130 t
+does change a real vehicle's inertia and this does not track it. Day 5 made the
+same simplification with a scalar `I_pitch`, so the two stay comparable, but it
+is a simplification in both.
+
+### Tomorrow (Day 15)
+3-D aerodynamics on top of today's validated rigid body: angle of attack,
+sideslip, force decomposition, and aerodynamic moments rather than forces alone.
+
+### Time spent
+_X hours_
+
+---
+
 ## Day 13 — 2026-08-18
 
 ### Done

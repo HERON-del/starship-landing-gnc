@@ -32,8 +32,11 @@ glance. The translucent cone is the glideslope corridor.
 | **Export** | full run as JSON — parameters plus trajectory |
 | **Re-solve** | `r`, or automatically on any control change |
 
-Fourteen problems are registered — one per day of work, plus the Week 1 3-DoF
-optimiser. The Day 13 entry is the only one with no optimiser behind it and no
+Fifteen problems are registered — one per day of work, plus the Week 1 3-DoF
+optimiser. The Day 14 entry carries a switch for the gyroscopic coupling term:
+at zero roll rate the two settings are bit-for-bit identical, and a nudge of
+roll separates them by tens of degrees over a six-second burn. The Day 13 entry
+is the only one with no optimiser behind it and no
 landing to fly: it turns the vehicle at a constant rate and shows what the Euler
 description of that rotation does at the singularity while the quaternion sails
 through it, and it carries the frame control that separates a body rate from an
@@ -112,6 +115,7 @@ published results in the trajectory-optimization literature.
 | Day 11 | Navigation: sensors and an Extended Kalman Filter | done |
 | Day 12 | IMU bias estimation by state augmentation | done |
 | Day 13 | Quaternion attitude and 3-D kinematics | done |
+| Day 14 | 3-D rigid-body dynamics: Euler's equations, two-axis gimbal | done |
 | Week 1 | 3-DoF convex powered descent, glideslope + tilt cones | done |
 | Week 2 | Sequential Convex Programming (SCvx) solver | done |
 | Week 3 | 6-DoF rigid-body dynamics with quaternions | |
@@ -122,6 +126,71 @@ published results in the trajectory-optimization literature.
 ---
 
 ## Results so far
+
+### 3-D rigid-body dynamics, and a sign error in Day 5 (Day 14)
+
+Day 13 built the machinery to *track* a 3-D orientation. This gives it real
+forces and torques: Euler's rotational equations with a full inertia tensor,
+a two-axis engine gimbal, and the `ω × (Iω)` coupling term that has no planar
+equivalent at all.
+
+![Gyroscopic relevance](results/day14_gyroscopic.png)
+
+**The term is exactly irrelevant at zero roll and dominant just above it.**
+Flying the same burn with the coupling included and with it dropped gives
+**0.0000° and 0.0000 m** of difference at zero roll rate — an identity, not a
+small number: with ω on a single principal axis, ω and `Iω` are parallel, the
+cross product vanishes, and a pitch-axis torque never moves ω off that axis. So
+for this project's roll-free flip, **Euler's equations *are* Day 5's scalar
+τ = Iα**, and today changes nothing behind it. At 0.1 rad/s of roll — under
+6 °/s — the same burn diverges by **18°** of attitude and 17 m over five
+seconds. The divergence peaks near 1 rad/s and falls beyond it, which is
+gyroscopic stiffening.
+
+The uncomfortable pairing is that this vehicle **has no roll authority**: the
+gimbal torque is `r × F` with `r` along the body long axis, so its roll
+component is identically zero — 0.00e+00 across 10,201 deflection pairs at full
+thrust, by construction rather than by tolerance. It can be disturbed into a
+roll it cannot remove.
+
+**The reduction check found a defect in Day 5.** `dynamics_6dof` uses
+`Tx = T sin(θ + δ)` for the thrust tilt and `τ = +T L sin δ` for the torque, and
+those two are not compatible — given that thrust convention, `r × F` comes out
+as `−T L sin δ`. Verified three ways: a planar derivation written from vectors
+inside the test file, the new 3-D model agreeing with it to **7.22e-16**, and
+the physical check that deflecting the nozzle toward +x pushes the tail toward
++x and therefore the nose toward −x. It is not a sign convention on δ — flipping
+δ changes the thrust tilt too, so what is wrong is the *relative* sign between
+tilt and torque, which no relabelling fixes.
+
+The consequence is that Day 5's vehicle tilts the same way its thrust already
+points, so rotation and translation reinforce instead of fighting. A real
+gimballed rocket is non-minimum phase.
+
+**Why twelve days of tests did not catch it** is the more useful half.
+`landing_flip.py` carries the same pairing, so the optimiser and the simulator
+agree with each other perfectly — and every verification here compares one
+against the other. Nothing had ever been compared against an independent
+derivation of the physics. Two mutually consistent models are indistinguishable
+from two correct ones until a third opinion turns up.
+
+**Left unfixed for now** — `dynamics_6dof` and `landing_flip` are load-bearing
+for Days 5–12 and eight viewer entries — but asserted in
+`tests/test_dynamics_3d.py` as an exact sign flip so it cannot drift unnoticed.
+Direction of the error, unquantified: Day 5's model is easier to control than a
+real vehicle, so the fuel and accuracy numbers on Days 5–12 are likely
+optimistic.
+
+![Poinsot tumble](results/day14_poinsot_tumble.png)
+
+**Validated against theorems rather than tolerances.** Torque-free motion
+conserves angular momentum as a *vector* in the inertial frame to **5.15e-12**
+relative, direction fixed to 1.5e-06°, while the body-frame ω swings **119°**
+over the same run — that second number is what gives the check teeth. Rotational
+kinetic energy holds to **5.61e-15**. And breaking axisymmetry reproduces the
+tennis-racket theorem with nothing in the code aware of it: minimum and maximum
+inertia axes stable, the **intermediate axis flipping completely**, +1.0000 to
+−1.0000.
 
 ### Quaternions: leaving the plane (Day 13)
 
@@ -632,6 +701,7 @@ src/
   ekf_bias.py          the filter with the bias promoted to a state (Day 12)
   quaternion.py        Hamilton algebra, DCM and Euler bridges (Day 13)
   dynamics_3d_kinematics.py  13-state 3-D kinematic model (Day 13)
+  dynamics_3d.py       14-state rigid body: Euler's equations, gimbal (Day 14)
   gnc/
     types.py           Param + Trajectory contracts shared by solver and viewer
     registry.py        problem plugin registry
