@@ -32,8 +32,12 @@ glance. The translucent cone is the glideslope corridor.
 | **Export** | full run as JSON — parameters plus trajectory |
 | **Re-solve** | `r`, or automatically on any control change |
 
-Sixteen problems are registered — one per day of work, plus the Week 1 3-DoF
-optimiser. The Day 15 entry flies the same descent in still air and in a
+Seventeen problems are registered — one per day of work, plus the Week 1 3-DoF
+optimiser. The Day 16 entry is the only one for a solver that does **not**
+converge, and it is built to show that: it draws the plan the optimiser
+produced and the trajectory that plan actually flies, under a switch, and
+defaults to the flown one. The plan lands nanometres from the pad; the flown
+one misses by 250 m. The Day 15 entry flies the same descent in still air and in a
 crosswind with the yaw gimbal pinned at zero, so you can watch a degree of
 freedom the planar model never had start moving on its own. The Day 14 entry
 carries a switch for the gyroscopic coupling term:
@@ -164,9 +168,9 @@ grows, 0.557 → 0.416 → 0.310, which is the opposite signature). What fits is
 over-constrained sub-problem: hard terminal equalities on all four state
 blocks, a 40% throttle floor putting minimum deceleration at 21 m/s² against
 gravity's 9.8, and a fixed horizon. `tests/test_scvx_3d.py` asserts the failure
-so it cannot regress unnoticed, and there is no viewer entry for this day —
-publishing a 3-D trajectory that is not dynamically feasible would be the wrong
-thing to put on the site.
+so it cannot regress unnoticed, and the viewer entry defaults to the *flown*
+trajectory rather than the plan, with a switch between them — the gap between
+the two is the entry's whole point.
 
 Two things the sub-problem needed that the guide does not have: **variable
 scaling** (without it the problem spans seven orders of magnitude and the

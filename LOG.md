@@ -912,6 +912,10 @@ _X hours_
   trust regions and virtual control over the full state; plus a replay harness
   that flies the answer through Day 15's true model
 - `tests/test_scvx_3d.py`: 8 groups, all passing
+- `scvx-3d` added to the viewer (seventeen problems) — it draws the plan and
+  the trajectory that plan flies under a switch, defaulting to the flown one,
+  because a plan that pays slack is not a trajectory and the site should not
+  imply otherwise
 
 **The solver does not converge.** That is the headline and it is recorded here
 rather than buried. Everything that can be verified about the convex
