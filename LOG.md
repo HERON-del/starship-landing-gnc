@@ -903,6 +903,137 @@ _X hours_
 
 ---
 
+## Day 18 — 2026-08-18
+
+### Done
+- `src/benchmark_szmuk.py`: the paper's Problem 2 — free final time through
+  the time-dilation variable, minimum-time cost, Table 1 and Table 2
+  transcribed, both the paper's literal Algorithm 1 and the guide's
+  hard-trust-region variant runnable
+- `tests/test_benchmark_szmuk.py`: 7 groups, all passing
+- `szmuk-benchmark` added to the viewer (eighteen problems)
+
+Seventeen days checked this project against tests written alongside the code
+they test. This is the first check against numbers chosen by people who have
+never seen the codebase.
+
+### The part that is genuinely external, and it passes
+The paper's rigid-body model and this project's are the same physics written
+twice, independently. Measured over 400 random quaternions and rate vectors:
+
+| quantity | paper's expression vs this project's | worst |
+|---|---|---|
+| direction cosine matrix | `dcm_body_from_inertial(q).T` vs `quat_to_rotmatrix(q)` | **8.88e-16** |
+| gyroscopic term | `w x Jw` vs Day 14's `gyroscopic_term` | **0.00e+00** |
+
+That is the strongest external confirmation Days 13–15 have had. Two
+derivations that never saw each other agree to machine precision.
+
+The constraint set behaves too: terminal position **3.45e-16 UL**, terminal
+velocity, attitude and rate all exact, and the solution rides its bounds —
+thrust peaks at **5.000** of 5.0, gimbal at **20.00 deg** of 20. The paper's
+qualitative claim about thrust saturation reproduces.
+
+### The guide's root cause is wrong, and it is one parameter
+The Day 18 guide reports a virtual-control residual of 4.4–5.0 for the 2-D
+case and attributes it — in Part 5, Part 6, and three code comments — entirely
+to using a single-endpoint state-transition matrix instead of the paper's
+exact double integrals.
+
+`alpha_m`, the mass-depletion constant, is not in the paper. The guide sets it
+to 1.0 and calls it a placeholder in three places. It is not a harmless one.
+Hover thrust here is `m*g ~ 2`, so at `alpha_m = 1.0` a three-unit trajectory
+needs **6.0 UM of propellant against the 1.0 UM the vehicle carries**. The mass
+floor binds almost immediately, after which the mass row of the dynamics cannot
+be satisfied by any control — and the velocity row follows it, because mass
+enters velocity through `F/m`.
+
+Decomposing the residual by state block, which the guide never does:
+
+| alpha_m | \|nu\| | mass | position | velocity | quaternion | rate |
+|---|---|---|---|---|---|---|
+| 1.0 (the guide's) | **5.396** | 21% | 0% | 71% | 8% | 0% |
+| 0.03 | **0.0147** | 0% | 100% | 0% | 0% | 0% |
+
+A factor of **366**, from one number the guide waves through. The residual it
+blames on discretisation is 99.7% the placeholder. Zero of it was ever in the
+position row at `alpha_m = 1.0`; all of it is there once the mass dynamics are
+physical, which is what a discretisation-limited residual should actually look
+like.
+
+### The paper's central claim does not reproduce
+Section IV.A's headline is robustness: ten time-of-flight guesses from 1 to 10
+UT, all converging to within **0.01 UT**. The guide lists this as "not directly
+tested" and moves on. It is the one number the paper actually stakes its case
+on, so it is the one worth running.
+
+Five guesses, `alpha_m` sized so the propellant lasts:
+
+| guess | 1 | 3 | 5 | 8 | 10 |
+|---|---|---|---|---|---|
+| tf found | 6.8 | 11.7 | 15.1 | 28.5 | 22.0 |
+
+Spread **21.70 UT** against a claimed 0.01, and the correlation between guess
+and answer is **0.892**. A free variable that follows its own initial guess is
+not being solved for.
+
+### And the guide's own failure description does not reproduce either
+The guide says the paper's literal Algorithm 1 — soft trust penalty only —
+"did not converge: sigma collapsed toward 0 on the very first iteration and
+then oscillated between roughly 0.7 and 3.7 UT."
+
+Run as printed, it does something else entirely. Virtual control reaches
+**3.45e-17**, machine precision, far better than the hard-trust version ever
+manages. Sigma never goes near zero — its minimum over the run is **2.56** —
+and it climbs **monotonically from 2.56 to 26.20 UT**. Not a collapse and not
+an oscillation: a runaway in the opposite direction.
+
+**Why, and it is in the paper's own Table 2.** The cost is
+`sigma + w_nu*|nu| + ...` with `w_nu = 1e5` and sigma's coefficient equal to 1.
+Feasibility outprices minimum-time **one hundred thousand to one**, so the
+optimiser will buy twenty units of flight time to shed a fraction of a unit of
+virtual control. Time is very nearly free.
+
+That also explains the robustness failure. The guide's hard trust region caps
+how far sigma can move from its reference each iteration, which stops the
+runaway — by pinning sigma near wherever it started. The oscillation goes away
+and so does the optimisation. The two failures are the same fact seen twice.
+
+### What this says about Days 16 and 17
+Day 17 diagnosed the Starship solver's non-convergence as a throttle floor:
+`T_min/m_wet` was 2.16 g there, so a lit engine could not push the vehicle
+down. The paper's vehicle has `T_min/m_wet = 0.150` against `g = 1.0` — real
+throttle authority in both directions, and the Day 17 pathology cannot occur
+in it. Running the same architecture on a problem free of that specific
+pathology and getting a different failure mode is a useful separation: the
+throttle floor was real and specific to Days 16–17's vehicle, and it was not
+the only thing wrong.
+
+### Honest limitations
+- `alpha_m` is still not a paper number. The default here is sized so the
+  propellant lasts a plausible trajectory; it is a defensible choice and not a
+  transcription, and the solved `tf` depends on it strongly (2.99 at 1.0, 11.65
+  at 0.03), which means **tf is not a comparable number against the paper
+  either**. The guide compares it anyway.
+- The 3-D case's initial velocity is not in the paper. The north component is
+  this project's choice and is flagged as such in the code.
+- I have not implemented the paper's exact Eq. 22 double integrals. Given that
+  the residual is now 100% position and two orders of magnitude smaller, that
+  is the right next thing to try — but it should be tried against the corrected
+  `alpha_m`, not the placeholder, or it will appear to fix something it did not
+  cause.
+
+### Tomorrow (Day 19)
+Optimality rather than feasibility: Pontryagin conditions, KKT residuals from
+the solver's own duals, and a second backend. Worth doing — but the cost-weight
+finding above says the minimum-time objective is barely being optimised at all
+here, so "is the answer optimal" has a cheap answer first.
+
+### Time spent
+_X hours_
+
+---
+
 ## Day 17 — 2026-08-18
 
 ### Done

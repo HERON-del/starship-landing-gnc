@@ -129,6 +129,7 @@ published results in the trajectory-optimization literature.
 | Day 15 | 3-D aerodynamics: angle of attack, sideslip, aero moments | done |
 | Day 16 | 3-D SCvx solver: convex sub-problem built, not converging | partial |
 | Day 17 | 3-D validation: physics confirmed, solver failure located | done |
+| Day 18 | Benchmark replication: Szmuk & Açıkmeşe (2018) | done |
 | Week 1 | 3-DoF convex powered descent, glideslope + tilt cones | done |
 | Week 2 | Sequential Convex Programming (SCvx) solver | done |
 | Week 3 | 6-DoF rigid-body dynamics with quaternions | |
@@ -139,6 +140,53 @@ published results in the trajectory-optimization literature.
 ---
 
 ## Results so far
+
+### Meeting a second opinion: the Szmuk & Açıkmeşe benchmark (Day 18)
+
+Seventeen days checked this project against tests written alongside the code
+they test. This is the first check against numbers chosen by people who have
+never seen the codebase — Szmuk & Açıkmeşe's free-final-time 6-DoF SCvx
+formulation (AIAA SciTech 2018-0617, arXiv:1802.03827), in the paper's own
+non-dimensional units and its own conventions, including `e1` as the vertical
+axis and mass first in the state vector.
+
+**The genuinely external part passes.** The paper's rigid-body model and this
+project's turn out to be the same physics written twice: the direction cosine
+matrices agree to **8.88e-16** over 400 random quaternions, and the gyroscopic
+term matches Day 14's to **0.00e+00**. That is the strongest confirmation Days
+13–15 have had. Terminal conditions come out at **3.45e-16 UL** and the
+solution rides its bounds — thrust at exactly 5.000 of 5.0, gimbal at 20.00° of
+20 — reproducing the paper's qualitative claim about thrust saturation.
+
+**The paper's central claim does not reproduce.** Its headline is robustness:
+ten time-of-flight guesses from 1 to 10 UT all converging within **0.01 UT**.
+Measured here across five guesses, the spread is **21.70 UT** and the answer
+correlates with the guess at **0.892**. A free variable that follows its own
+initial guess is not being solved for.
+
+**Why, and it is in the paper's own Table 2.** The cost is
+`σ + w_ν·|ν| + …` with `w_ν = 1e5` against a σ coefficient of **1**.
+Feasibility outprices minimum-time a hundred thousand to one, so the optimiser
+will buy twenty units of flight time to shed a fraction of a unit of virtual
+control — time is very nearly free. Run the paper's literal Algorithm 1
+(soft trust penalty only), and σ climbs monotonically from 2.56 to **26.20 UT**
+while virtual control falls to **3.45e-17**. A hard trust region stops that
+runaway by pinning σ near where it started, which removes the oscillation and
+the optimisation together.
+
+**One parameter, not the discretisation.** `α_ṁ` is not in the paper; the Day 18
+guide sets it to 1.0, calls it a harmless placeholder, and attributes its
+residual of 4.4–5.0 entirely to a cruder discretisation than the paper's. At
+1.0 a three-unit trajectory needs **6.0 UM of propellant against the 1.0 UM the
+vehicle carries** — the mass floor binds and the mass row becomes unsatisfiable.
+Decomposing the residual by state block: at α_ṁ = 1.0 it is 21% mass and 71%
+velocity with **zero** in position; sized so the propellant lasts, it drops to
+**0.0147** — a factor of **366** — and becomes 100% position, which is what a
+discretisation-limited residual should actually look like.
+
+Since the solved `tf` depends strongly on α_ṁ (2.99 at 1.0, 11.65 at 0.03), and
+α_ṁ is not a paper number, **`tf` is not a comparable quantity against the
+paper either**.
 
 ### Validation: the physics holds, the solvers do not (Day 17)
 
@@ -850,6 +898,7 @@ src/
   dynamics_3d.py       14-state rigid body: Euler's equations, gimbal (Day 14)
   aero_3d.py           3-D aero: alpha, beta, forces and moments (Day 15)
   scvx_3d.py           14-state 3-D SCvx sub-problem (Day 16)
+  benchmark_szmuk.py   Szmuk & Acikmese (2018) replication (Day 18)
   scvx_3d_validate.py  second, independent 3-D formulation (Day 17)
   gnc/
     types.py           Param + Trajectory contracts shared by solver and viewer
