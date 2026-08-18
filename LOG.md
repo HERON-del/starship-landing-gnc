@@ -903,6 +903,138 @@ _X hours_
 
 ---
 
+## Day 17 — 2026-08-18
+
+### Done
+- `src/scvx_3d_validate.py`: a second, independent 3-D SCvx formulation —
+  state-transition-matrix discretisation, finite-difference Jacobians, soft
+  trust penalty, geometric trust schedule — sharing Days 13–15's physics and
+  nothing else with Day 16
+- `tests/test_3d_validation.py`: 6 groups, all live re-solves, all passing
+- `scvx-3d-validate` added to the viewer (eighteenth problem)
+
+### The physics is validated. The solvers are not.
+That is the whole result, and the two halves are separable because today's
+solver shares the physics with Day 16 and shares no algorithm with it.
+
+**Planar reduction passes at bit-for-bit zero.** Given a planar initial
+condition the solver produces out-of-plane position, out-of-plane velocity,
+roll rate, yaw rate and side thrust of **exactly 0.00e+00** — not 1e-12, not
+"negligible". The in-plane and out-of-plane subspaces do not mix, in a
+formulation whose Jacobians come from central differences rather than Day 16's
+hand-derived analytics. Two independent derivations of the same physics agree
+that there is no leakage, which is about as strong a statement as this kind of
+check can make. **Days 13–15 are not the problem.**
+
+**And the 3-D case genuinely uses the third dimension** — 192 m of cross-range,
+93 m/s of out-of-plane velocity, 19.9 deg/s of roll and yaw rate. That matters
+because a solver secretly still planar would pass the reduction test trivially.
+
+**Neither formulation converges.** Virtual control bottoms out at 18.3 against
+a 1e-1 target, and the plan misses by 334 m at 19.6 m/s when flown. Day 16's
+solver fails the same way with completely different algorithmic machinery,
+which locates the failure in what they share that is *not* physics: the problem
+statement.
+
+### The bug the guide misses, and it is the one that matters
+The guide documents three bugs and picks `tf = 18.0 s`. That number is the
+problem.
+
+This vehicle cannot throttle below 40 per cent. A lit engine therefore produces
+at least
+
+    T_min / m_wet = 2.76e6 / 130,000 = 21.23 m/s^2
+
+against gravity's 9.81 — a net **upward** floor of **+11.42 m/s²**. The engine
+cannot push the vehicle down. So from a descent rate of 80 m/s there is exactly
+one burn duration that arrives at rest:
+
+    t = 80 / 11.42 = 7.00 s
+
+and the guide's 18 s is **2.6× that ceiling**. A burn that long does not land
+softly; it turns the descent into a climb.
+
+The flown results track the arithmetic:
+
+| t_f | flown arrival speed | flown miss |
+|---|---|---|
+| 6 s | 20.1 m/s | 339 m |
+| **7 s** | **19.6 m/s** | **334 m** |
+| 8 s | 28.3 m/s | 345 m |
+| 10 s | 54.2 m/s | 410 m |
+| 14 s | 122.2 m/s | 729 m |
+| 18 s | 201.8 m/s | 1,301 m |
+
+Minimised exactly where the closed form says, then monotonic. Shortening the
+horizon to the ceiling takes the arrival speed from 201.8 m/s to 19.6 and the
+miss from 1,301 m to 334.
+
+### Where the slack sits, which is how it was found
+Decomposing the virtual control by state block on the first iterations:
+
+    iter 1:  pos 11.4%   vel 88.4%   quat 0.1%   omega 0.1%
+    iter 2:  pos  3.6%   vel 90.4%   quat 5.5%   omega 0.5%
+
+Nearly all of it is in the **velocity** rows. That is not an attitude problem
+or a quaternion problem — it is the translational dynamics being unsatisfiable,
+which is exactly what a throttle floor fighting a fixed horizon looks like.
+Day 16 guessed at an over-constrained sub-problem; this locates it.
+
+### The guide's reported numbers do not survive checking
+Its Part 4 claims 6/6 passing with the 3-D case landing at 2.24e-04 m using
+**0.00° of gimbal**, steering "via body attitude". In its own solver torque is
+`M_B = r_TB × u`, which is identically zero when `u` lies along the body axis.
+Zero gimbal means zero torque means the attitude cannot change at all, so that
+trajectory cannot have steered anywhere.
+
+Two things make those numbers reachable without anything working. Its
+`solve_scvx` returns its reference array whatever happens, so a run whose first
+sub-problem is infeasible hands back the straight-line initial guess — which
+lands at the origin, upright, at rest, with thrust along the body axis and
+therefore zero gimbal, because that is how the guess was constructed. Every one
+of those is something its tests accept. And its `initialize_reference` sets the
+quaternion to `[1,0,0,0]` at every node, so "lands upright, q_err = 8.89e-08"
+is a property of the guess rather than of a solution.
+
+Today's loop reports `ever_solved` and `is_initial_guess`, and Test 2 asserts a
+sub-problem actually solved, precisely so this cannot happen here.
+
+Its identical fuel figures across two different problems — 27,098.2 kg and
+27,099.4 kg, agreeing to five significant figures on initial conditions
+differing by 180 m of cross-range and 20 m/s of out-of-plane velocity — point
+the same way.
+
+### What is still broken
+Even at the right horizon the plan misses by 334 m and the virtual control sits
+at 18.3. So the throttle-floor conflict was a large contributor and not the
+only one. The residual miss is roughly flat across `t_f` (339, 334, 345, 410),
+which suggests something that does not scale with horizon length — the
+linearisation or the discretisation. That is the next thing to isolate.
+
+Both loops also end the same way: the trust radius shrinks geometrically until
+the sub-problem goes infeasible, at iteration 8 here. The guide records this as
+its third bug and defers the fix to Day 7's accept/reject step-quality
+controller. Day 16 already has that controller and still does not converge, so
+porting it is unlikely to be the answer.
+
+### Honest note on the guide's premise
+It proposes rebuilding the vehicle, quaternion algebra and dynamics standalone,
+on the grounds that earlier days "live only in markdown, not as a live module".
+That is not true of this repository — every day since Day 1 is an importable
+module with its own suite. Re-typing the physics would validate a fresh copy of
+it and nothing else, which is the opposite of what a validation day is for. The
+algorithmic differences are kept; the physics is imported.
+
+### Tomorrow (Day 18)
+The guide points at reproducing Szmuk & Açıkmeşe. That should wait. Reproducing
+a paper's numbers with a solver that does not converge would produce agreement
+or disagreement that means nothing either way. The residual 334 m first.
+
+### Time spent
+_X hours_
+
+---
+
 ## Day 16 — 2026-08-18
 
 ### Done

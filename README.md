@@ -32,9 +32,12 @@ glance. The translucent cone is the glideslope corridor.
 | **Export** | full run as JSON — parameters plus trajectory |
 | **Re-solve** | `r`, or automatically on any control change |
 
-Seventeen problems are registered — one per day of work, plus the Week 1 3-DoF
-optimiser. The Day 16 entry is the only one for a solver that does **not**
-converge, and it is built to show that: it draws the plan the optimiser
+Eighteen problems are registered — one per day of work, plus the Week 1 3-DoF
+optimiser. The Day 17 entry is where the 3-D work gets checked: flip its
+initial condition to planar and every out-of-plane quantity comes back at
+exactly zero, and move its burn-duration slider to watch the throttle floor
+turn a descent into a climb past 7 seconds. The Day 16 entry is the first for a
+solver that does **not** converge, and it is built to show that: it draws the plan the optimiser
 produced and the trajectory that plan actually flies, under a switch, and
 defaults to the flown one. The plan lands nanometres from the pad; the flown
 one misses by 250 m. The Day 15 entry flies the same descent in still air and in a
@@ -125,6 +128,7 @@ published results in the trajectory-optimization literature.
 | Day 14 | 3-D rigid-body dynamics: Euler's equations, two-axis gimbal | done |
 | Day 15 | 3-D aerodynamics: angle of attack, sideslip, aero moments | done |
 | Day 16 | 3-D SCvx solver: convex sub-problem built, not converging | partial |
+| Day 17 | 3-D validation: physics confirmed, solver failure located | done |
 | Week 1 | 3-DoF convex powered descent, glideslope + tilt cones | done |
 | Week 2 | Sequential Convex Programming (SCvx) solver | done |
 | Week 3 | 6-DoF rigid-body dynamics with quaternions | |
@@ -135,6 +139,45 @@ published results in the trajectory-optimization literature.
 ---
 
 ## Results so far
+
+### Validation: the physics holds, the solvers do not (Day 17)
+
+Day 16 built a 3-D SCvx solver that does not converge, which left an open
+question: is the *physics* from Days 13–15 wrong, or only that one convex
+formulation? The way to answer it is a second solver that shares the physics
+and nothing else — state-transition-matrix discretisation instead of an Euler
+step, finite-difference Jacobians instead of hand-derived analytics, a
+geometric trust schedule instead of an accept/reject controller.
+
+**The planar reduction passes at bit-for-bit zero.** Given a planar initial
+condition, out-of-plane position, out-of-plane velocity, roll rate, yaw rate
+and side thrust all come back as **exactly 0.00e+00** — not 1e-12. The
+in-plane and out-of-plane subspaces do not mix, in a formulation whose
+Jacobians were derived a completely different way from Day 16's. Two
+independent derivations agreeing there is no leakage is about as strong as
+this check gets: **Days 13–15 are not the problem.** The complementary test
+matters too — the 3-D case genuinely uses the third dimension, 192 m of
+cross-range and 19.9 °/s of roll and yaw, so the reduction result isn't a
+solver that stayed planar by accident.
+
+**Neither formulation converges**, and the failure is now located. Decomposing
+the virtual control by state block puts **88–90% of it in the velocity rows** —
+not attitude, not the quaternion. That is the translational dynamics being
+unsatisfiable, and the cause is arithmetic the guide never does: this vehicle
+cannot throttle below 40%, so a lit engine produces at least 21.23 m/s²
+against gravity's 9.81 — a net **upward** floor of +11.42 m/s². The engine
+cannot push the vehicle down. From 80 m/s of descent there is exactly one burn
+duration that arrives at rest, `80 / 11.42 = 7.00 s`, and the guide picks
+**18 s — 2.6× that ceiling**. A burn that long doesn't land softly; it turns
+the descent into a climb.
+
+Flown arrival speed is minimised exactly at 7 s (19.6 m/s) and climbs
+monotonically after — 28.3 at 8 s, 54.2 at 10, 122.2 at 14, 201.8 at 18.
+Shortening the horizon to the ceiling takes the miss from 1,301 m to 334 m.
+
+That residual 334 m is roughly flat across horizon length, so the throttle
+floor was a large contributor and not the only one. `tests/test_3d_validation.py`
+asserts the remaining failure so it cannot regress unnoticed.
 
 ### The 3-D SCvx solver, and where it stops (Day 16)
 
@@ -807,6 +850,7 @@ src/
   dynamics_3d.py       14-state rigid body: Euler's equations, gimbal (Day 14)
   aero_3d.py           3-D aero: alpha, beta, forces and moments (Day 15)
   scvx_3d.py           14-state 3-D SCvx sub-problem (Day 16)
+  scvx_3d_validate.py  second, independent 3-D formulation (Day 17)
   gnc/
     types.py           Param + Trajectory contracts shared by solver and viewer
     registry.py        problem plugin registry
