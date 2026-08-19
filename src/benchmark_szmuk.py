@@ -46,6 +46,31 @@ filled in:
   unsatisfiable. See `ALPHA_M_NOTE` and the sweep in the test suite.
 * The 3-D case's initial velocity. The paper plots the case but never prints
   `v_I,i` for it. The north component here is this project's choice.
+
+The result, and a correction to an earlier one
+----------------------------------------------
+With `alpha_m` sized so the propellant lasts **and** the paper's own Eq. 22
+first-order-hold integrals implemented, **the paper's central claim
+reproduces**: ten time-of-flight guesses from 1 to 10 UT all land within
+**0.00183 UT** of each other -- inside the paper's own stated bar of 0.01 --
+with virtual control between 1e-15 and 1e-17. That is with Algorithm 1 exactly
+as printed: **no hard trust region and no quaternion renormalisation**, both of
+which the Day 18 guide calls necessary additions.
+
+This corrects a claim published earlier in this project. With a single-endpoint
+approximation to the discretisation in place of the paper's integrals, the
+sweep spread 21.7 UT and the flight time tracked its own initial guess, and
+that was written up as the paper's claim failing to reproduce, with the cost
+weights (`w_nu = 1e5` against a sigma coefficient of 1) offered as the reason.
+The cost weights are fine. With an accurate discretisation the optimiser drives
+the virtual control to machine precision without needing to buy flight time,
+and sigma settles at 3.282 from any starting guess. The failure was in this
+implementation, not in the paper.
+
+`discretize` (single-endpoint) is kept alongside `discretize_exact_foh` so the
+difference is measurable rather than described -- that comparison is what
+settles which layer a residual lives in, and it is the whole content of the
+test suite's Tests 4 to 6.
 """
 
 import os
@@ -259,6 +284,63 @@ def discretize(x_ref, u_ref, sigma_ref, veh, dtau, nsub=5):
     return Phi, Phi @ B * dtau, Phi @ Sig * dtau, Phi @ z * dtau
 
 
+def discretize_exact_foh(x_ref, u_ref, sigma_ref, veh, dtau, nsub=20):
+    """
+    The paper's Eq. 22 first-order hold, with the integrals actually taken.
+
+    `discretize` above evaluates the input matrices once, at the interval's
+    left endpoint, and multiplies by dtau. The paper instead integrates them
+    across the interval against the two hold weights,
+
+        lam_minus(s) = (dtau - s) / dtau,   lam_plus(s) = s / dtau
+
+    which gives a separate matrix for u_k and u_{k+1} rather than one for a
+    control held constant. Both are returned here so the two can be compared
+    directly, which is the point: Day 18 measured that the guide's residual was
+    its omitted alpha_m rather than this, and the honest way to finish that
+    argument is to implement the thing it blamed and see what is left.
+
+    Integration is RK4 over the augmented system, with A frozen at the
+    reference over the interval -- the same linearisation both versions use, so
+    the only difference between them is the quadrature.
+    """
+    A, B, Sig, z = linearize_at(x_ref, u_ref, sigma_ref, veh)
+    n = N_STATE
+    Phi = np.eye(n)
+    Pm = np.zeros((n, 3))
+    Pp = np.zeros((n, 3))
+    Ps = np.zeros(n)
+    Pz = np.zeros(n)
+    h = dtau / nsub
+
+    def deriv(s, Phi_s, _Pm, _Pp, _Ps, _Pz):
+        # Phi(s) propagates forward; the integrands carry Phi(s)^-1, which for
+        # a frozen A is the backward propagator.
+        Phi_inv = np.linalg.solve(Phi_s, np.eye(n))
+        lam_m = (dtau - s) / dtau
+        lam_p = s / dtau
+        return (A @ Phi_s,
+                Phi_inv @ B * lam_m,
+                Phi_inv @ B * lam_p,
+                Phi_inv @ Sig,
+                Phi_inv @ z)
+
+    s = 0.0
+    for _ in range(nsub):
+        k1 = deriv(s, Phi, Pm, Pp, Ps, Pz)
+        k2 = deriv(s + h / 2, Phi + h / 2 * k1[0], None, None, None, None)
+        k3 = deriv(s + h / 2, Phi + h / 2 * k2[0], None, None, None, None)
+        k4 = deriv(s + h, Phi + h * k3[0], None, None, None, None)
+        Phi = Phi + (h / 6) * (k1[0] + 2 * k2[0] + 2 * k3[0] + k4[0])
+        Pm = Pm + (h / 6) * (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1])
+        Pp = Pp + (h / 6) * (k1[2] + 2 * k2[2] + 2 * k3[2] + k4[2])
+        Ps = Ps + (h / 6) * (k1[3] + 2 * k2[3] + 2 * k3[3] + k4[3])
+        Pz = Pz + (h / 6) * (k1[4] + 2 * k2[4] + 2 * k3[4] + k4[4])
+        s += h
+
+    return Phi, Phi @ Pm, Phi @ Pp, Phi @ Ps, Phi @ Pz
+
+
 def initialize_reference(bc, veh, K, sigma_guess):
     """The paper's Algorithm 1 initialisation: straight lines, hover thrust."""
     ref_x = np.zeros((K, N_STATE))
@@ -278,7 +360,7 @@ def initialize_reference(bc, veh, K, sigma_guess):
 # Convex sub-problem -- the paper's Problem 2
 # ======================================================================
 def solve_subproblem(ref_x, ref_u, ref_sigma, bc, veh, alg, trust_radius,
-                     hard_trust=True):
+                     hard_trust=True, exact_foh=True):
     """
     One sub-problem. `hard_trust=False` is the paper's Algorithm 1 literally --
     soft L2 penalty only -- which is worth being able to run, because it is
@@ -333,8 +415,19 @@ def solve_subproblem(ref_x, ref_u, ref_sigma, bc, veh, alg, trust_radius,
                  <= trust_radius * max(ref_sigma, 1.0)]
 
     for k in range(K - 1):
-        Ad, Bd, Sd, zd = discretize(ref_x[k], ref_u[k], ref_sigma, veh, dtau)
-        cons += [x[k + 1] == Ad @ x[k] + Bd @ u[k] + Sd * sigma + zd + nu[k]]
+        if exact_foh:
+            # The paper's Eq. 22: u_k and u_{k+1} carry separate matrices,
+            # because a first-order hold interpolates between them across the
+            # interval rather than holding one of them constant.
+            Ad, Bm, Bp, Sd, zd = discretize_exact_foh(
+                ref_x[k], ref_u[k], ref_sigma, veh, dtau)
+            cons += [x[k + 1] == Ad @ x[k] + Bm @ u[k] + Bp @ u[k + 1]
+                     + Sd * sigma + zd + nu[k]]
+        else:
+            Ad, Bd, Sd, zd = discretize(ref_x[k], ref_u[k], ref_sigma, veh,
+                                        dtau)
+            cons += [x[k + 1] == Ad @ x[k] + Bd @ u[k] + Sd * sigma + zd
+                     + nu[k]]
 
     cost = (sigma
             + alg.w_nu * cp.sum(cp.abs(nu))
@@ -376,8 +469,8 @@ def residual_by_block(nu):
 # Outer loop -- the paper's Algorithm 1
 # ======================================================================
 def solve_benchmark(bc, veh=None, alg=None, sigma_guess=3.0, trust0=0.6,
-                    trust_shrink=0.85, trust_min=0.05, hard_trust=True,
-                    renormalize=True, verbose=True):
+                    trust_shrink=0.85, trust_min=0.05, hard_trust=False,
+                    renormalize=False, exact_foh=True, verbose=True):
     """
     Algorithm 1, with two documented additions.
 
@@ -398,7 +491,8 @@ def solve_benchmark(bc, veh=None, alg=None, sigma_guess=3.0, trust0=0.6,
               f"{'radius':>8}  status")
     for i in range(1, alg.N_iter_max + 1):
         prob, out = solve_subproblem(ref_x, ref_u, ref_sigma, bc, veh, alg,
-                                     trust_radius, hard_trust=hard_trust)
+                                     trust_radius, hard_trust=hard_trust,
+                                     exact_foh=exact_foh)
         hist["status"].append(prob.status)
         if out is None:
             if verbose:

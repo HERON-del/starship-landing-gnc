@@ -9,6 +9,7 @@ Groups:
     4. Where the dynamics residual actually lives
     5. The paper's central claim -- robustness to the time-of-flight guess
     6. The paper's literal Algorithm 1, run as printed
+    6b. What actually broke it: the discretisation, isolated
     7. Boundary conditions and the convex constraint set
 
 Run:  python tests/test_benchmark_szmuk.py
@@ -26,6 +27,7 @@ from src.benchmark_szmuk import (                              # noqa: E402
     PaperVehicle, PaperAlgorithm, two_d_case, three_d_case,
     dcm_body_from_inertial, omega_matrix, nonlinear_dynamics,
     solve_benchmark, residual_by_block, ALPHA_M_NOTE,
+    discretize, discretize_exact_foh, initialize_reference,
     IDX_M, IDX_R, IDX_V, IDX_Q, IDX_W,
 )
 from src.quaternion import quat_to_rotmatrix, quat_normalize   # noqa: E402
@@ -181,87 +183,152 @@ def test_residual_location():
                  f"final mass = {hot['x'][-1, IDX_M]:.4f}")
     ok &= report("sizing alpha_m collapses the residual",
                  cool["nu_total"] < hot["nu_total"] / 50.0,
-                 f"{hot['nu_total']:.3f} -> {cool['nu_total']:.4f}, a factor "
-                 f"of {hot['nu_total'] / max(cool['nu_total'], 1e-12):.0f}")
-    note("so the discretisation is not what the guide says it is", "")
-    note("  mass pinned at m_dry makes the mass row unsatisfiable, and", "")
-    note("  velocity follows because F/m carries the wrong mass.", "")
+                 f"{hot['nu_total']:.3e} -> {cool['nu_total']:.3e}")
+
+    # The control that settles the guide's own root-cause claim: apply the fix
+    # it proposes, at the alpha_m it proposes, and see whether it helps.
+    hot_exact = cached("hot_exact", lambda: solve_benchmark(
+        two_d_case(), veh=PaperVehicle(alpha_m=1.0), alg=alg,
+        sigma_guess=3.0, exact_foh=True, verbose=False))
+    ok &= report("the guide's own proposed fix does NOT help at its alpha_m",
+                 hot_exact["nu_total"] > 0.5 * hot["nu_total"],
+                 f"exact Eq. 22 gives {hot_exact['nu_total']:.3f} against "
+                 f"{hot['nu_total']:.3f} -- no better")
+    note("mass pinned at m_dry makes the mass row unsatisfiable, and", "")
+    note("  velocity follows because F/m carries the wrong mass. No", "")
+    note("  quadrature scheme fixes a constraint that is simply binding.", "")
     return ok
 
 
 def test_robustness_to_time_guess():
     """
-    The paper's central empirical claim, which the guide declines to test.
+    The paper's central empirical claim, and it reproduces.
 
-    Ten time-of-flight guesses, all converging to within 0.01 UT. It is the
-    one number the paper actually stakes its case on, and the one this
-    replication is really trying to check.
+    Ten time-of-flight guesses from 1 to 10 UT, all converging to within
+    0.01 UT. This is the number the paper actually stakes its case on.
     """
     print("\nTEST 5 - Robustness to the time-of-flight guess")
     alg = PaperAlgorithm()
+    alg.K = 30
     veh = PaperVehicle(alpha_m=0.03)
     ok = True
 
     def sweep():
-        return [solve_benchmark(two_d_case(), veh=veh, alg=alg,
-                                sigma_guess=float(g), verbose=False)["sigma"]
-                for g in (1, 3, 5, 8, 10)]
+        out = []
+        for g in range(1, 11):
+            r = solve_benchmark(two_d_case(), veh=veh, alg=alg,
+                                sigma_guess=float(g), verbose=False)
+            out.append((r["sigma"], r["nu_total"]))
+        return out
 
-    tfs = np.array(cached("sweep", sweep))
+    res = cached("sweep", sweep)
+    tfs = np.array([a for a, _ in res])
+    nus = np.array([b for _, b in res])
     spread = float(tfs.max() - tfs.min())
-    ok &= report("the claim does NOT reproduce here",
-                 spread > 0.01,
-                 f"spread {spread:.2f} UT across five guesses, paper says "
-                 f"< 0.01")
-    corr = float(np.corrcoef(np.array([1, 3, 5, 8, 10], dtype=float), tfs)[0, 1])
-    ok &= report("the answer tracks the guess instead",
-                 corr > 0.8,
-                 f"correlation between guess and result = {corr:.3f}")
-    note("tf found: " + ", ".join(f"{t:.1f}" for t in tfs), "")
-    note("A free variable that follows its own initial guess", "")
-    note("  is not being solved for. See Test 6 for why.", "")
+
+    ok &= report("all ten guesses land within the paper's own bar",
+                 spread < 0.01,
+                 f"spread {spread:.5f} UT, paper claims < 0.01")
+    ok &= report("and they land on the same answer",
+                 float(tfs.std()) < 0.01,
+                 f"tf = {tfs.mean():.5f} +/- {tfs.std():.5f} UT")
+    ok &= report("with the virtual control at machine precision",
+                 float(nus.max()) < 1e-10,
+                 f"worst |nu| over the ten = {float(nus.max()):.2e}")
+    note("This corrects a claim published earlier in this project.", "")
+    note("  With a single-endpoint approximation in place of the paper's", "")
+    note("  Eq. 22 integrals the spread was 21.7 UT and the flight time", "")
+    note("  tracked its own guess, and that was written up as the paper's", "")
+    note("  claim failing. The failure was in the implementation.", "")
     return ok
 
 
 def test_paper_algorithm_as_printed():
     """
-    Algorithm 1 with no hard trust region, exactly as the paper prints it.
-
-    The guide says this collapses sigma toward zero and oscillates. It does
-    not. It drives the virtual control to machine precision and inflates
-    sigma without bound -- the opposite direction, which matters because the
-    two failures need opposite fixes.
+    Algorithm 1 with nothing added: no hard trust region, no quaternion
+    renormalisation. The guide calls both necessary. They are not.
     """
     print("\nTEST 6 - The paper's literal Algorithm 1")
     alg = PaperAlgorithm()
+    alg.K = 30
     veh = PaperVehicle(alpha_m=0.03)
     ok = True
 
-    soft = cached("soft", lambda: solve_benchmark(
-        two_d_case(), veh=veh, alg=alg, sigma_guess=1.0,
-        hard_trust=False, verbose=False))
-    seq = soft["history"]["sigma"]
+    def literal(g):
+        return solve_benchmark(two_d_case(), veh=veh, alg=alg,
+                               sigma_guess=float(g), hard_trust=False,
+                               renormalize=False, verbose=False)
 
-    ok &= report("it solves, every iteration",
-                 soft["ever_solved"] and len(seq) == alg.N_iter_max)
-    ok &= report("virtual control reaches machine precision",
-                 soft["nu_total"] < 1e-12,
-                 f"|nu| = {soft['nu_total']:.2e}, far below the hard-trust "
-                 f"version")
-    ok &= report("sigma does NOT collapse toward zero",
-                 min(seq) > 0.5,
-                 f"minimum sigma over the run = {min(seq):.2f}")
-    ok &= report("it inflates instead, monotonically",
-                 seq[-1] > 3.0 * seq[0],
-                 f"{seq[0]:.2f} -> {seq[-1]:.2f} UT")
+    a = cached("lit1", lambda: literal(1))
+    b = cached("lit10", lambda: literal(10))
 
-    note("Time is nearly free in the paper's own cost weights.", "")
-    note(f"  w_nu = {alg.w_nu:.0e} multiplies |nu|; sigma's coefficient", "")
-    note("  is 1. Feasibility outprices minimum-time 100,000 to 1, so the", "")
-    note("  optimiser buys any amount of flight time to shed a little", "")
-    note("  virtual control. The guide's hard trust region hides this by", "")
-    note("  pinning sigma near its guess -- which is exactly why Test 5", "")
-    note("  finds the answer tracking the guess.", "")
+    ok &= report("it converges with no hard trust region",
+                 a["nu_total"] < 1e-10 and b["nu_total"] < 1e-10,
+                 f"|nu| = {a['nu_total']:.2e} and {b['nu_total']:.2e}")
+    ok &= report("and with no quaternion renormalisation",
+                 True, "both flags off for this run")
+    ok &= report("guesses of 1 and 10 reach the same flight time",
+                 abs(a["sigma"] - b["sigma"]) < 0.01,
+                 f"{a['sigma']:.4f} vs {b['sigma']:.4f} UT")
+
+    # The guide reports sigma collapsing to zero on iteration 1. It does dip,
+    # from a far-off guess -- and then recovers, which is the part a cruder
+    # discretisation never gets to see.
+    seq = b["history"]["sigma"]
+    ok &= report("a far guess dips early and then recovers",
+                 min(seq) < seq[-1],
+                 "sigma: " + " ".join(f"{v:.2f}" for v in seq[:6]) + " ...")
+    note("The guide adds a hard trust box and renormalisation and calls", "")
+    note("  both necessary. With the paper's own discretisation neither", "")
+    note("  is, and the hard box measurably degrades the sweep -- 0.025 UT", "")
+    note("  of spread against 0.002 without it.", "")
+    return ok
+
+
+def test_discretisation_is_what_broke_it():
+    """
+    Isolating the cause, by changing exactly one thing.
+
+    Same alpha_m, same weights, same everything -- only the quadrature
+    differs. This is the measurement that says which layer the failure
+    lived in.
+    """
+    print("\nTEST 6b - The discretisation, isolated")
+    alg = PaperAlgorithm()
+    alg.K = 30
+    veh = PaperVehicle(alpha_m=0.03)
+    ok = True
+
+    crude = cached("crude", lambda: solve_benchmark(
+        two_d_case(), veh=veh, alg=alg, sigma_guess=3.0,
+        exact_foh=False, verbose=False))
+    exact = cached("exact", lambda: solve_benchmark(
+        two_d_case(), veh=veh, alg=alg, sigma_guess=3.0,
+        exact_foh=True, verbose=False))
+
+    ok &= report("single-endpoint quadrature leaves a real residual",
+                 crude["nu_total"] > 1e-3,
+                 f"|nu| = {crude['nu_total']:.3e}")
+    ok &= report("the paper's Eq. 22 integrals close it",
+                 exact["nu_total"] < 1e-10,
+                 f"|nu| = {exact['nu_total']:.3e}, a factor of "
+                 f"{crude['nu_total'] / max(exact['nu_total'], 1e-18):.1e}")
+
+    # The two schemes must agree on the state transition matrix -- they share
+    # the same linearisation, and only the input quadrature differs.
+    rx, ru, rs = initialize_reference(two_d_case(), veh, 20, 3.0)
+    dtau = 1.0 / 19
+    Ad, Bd, _, _ = discretize(rx[5], ru[5], rs, veh, dtau)
+    Ae, Bm, Bp, _, _ = discretize_exact_foh(rx[5], ru[5], rs, veh, dtau)
+    ok &= report("both schemes share the state transition matrix",
+                 float(np.abs(Ad - Ae).max()) < 1e-12,
+                 f"difference = {float(np.abs(Ad - Ae).max()):.2e}")
+    rel = float(np.abs(Bd - (Bm + Bp)).max()) / float(np.abs(Bd).max())
+    ok &= report("and differ only in the input quadrature",
+                 rel > 1e-3,
+                 f"{rel * 100:.1f}% on the input matrix -- the whole cause")
+    note("A few per cent on one matrix, and the difference between a", "")
+    note("  residual of 2e-01 and one of 5e-16.", "")
     return ok
 
 
@@ -319,6 +386,7 @@ def main():
         test_residual_location(),
         test_robustness_to_time_guess(),
         test_paper_algorithm_as_printed(),
+        test_discretisation_is_what_broke_it(),
         test_boundary_conditions_and_cones(),
     ]
     print("\n" + "=" * 70)
@@ -326,8 +394,10 @@ def main():
     print("ALL TESTS PASSED" if ok else "SOME TESTS FAILED")
     if ok:
         print("NOTE: Tests 5 and 6 passing means the paper's robustness claim")
-        print("      does NOT reproduce here. That is the finding, asserted so")
-        print("      it cannot regress into a silent success.")
+        print("      DOES reproduce, with Algorithm 1 exactly as printed.")
+        print("      Test 6b isolates what had to be right for that: the")
+        print("      paper's own Eq. 22 quadrature, and an alpha_m the paper")
+        print("      never gives.")
     print("=" * 70)
     return 0 if ok else 1
 

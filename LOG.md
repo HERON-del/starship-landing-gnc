@@ -1023,6 +1023,78 @@ the only thing wrong.
   `alpha_m`, not the placeholder, or it will appear to fix something it did not
   cause.
 
+
+> ## Correction, same day, after implementing the paper's Eq. 22
+>
+> **The paper's central claim does reproduce. The section above is wrong about
+> that, and the error was mine.**
+>
+> The Day 18 write-up above ends by naming the next thing to try: implement the
+> paper's exact first-order-hold integrals, against the corrected `alpha_m`.
+> Doing that changes the conclusion.
+>
+> With `alpha_m` sized so the propellant lasts **and** the paper's Eq. 22
+> quadrature in place, ten time-of-flight guesses from 1 to 10 UT land within
+> **0.00183 UT** of each other — inside the paper's own stated bar of 0.01 —
+> at tf = 3.28159 ± 0.00052, with virtual control between 1e-15 and 1e-17.
+>
+> And that is with Algorithm 1 **exactly as printed**: no hard trust region and
+> no quaternion renormalisation, both of which the Day 18 guide calls necessary
+> additions. Neither is needed. The hard box measurably *degrades* the sweep —
+> 0.025 UT of spread with it against 0.002 without.
+>
+> ### What I got wrong, and why
+>
+> The single-endpoint quadrature was this implementation's shortcut, not the
+> paper's. With it in place the sweep spread 21.7 UT and the flight time
+> tracked its own initial guess, and I wrote that up as the paper's claim
+> failing — offering the cost weights as the explanation, `w_nu = 1e5` against a
+> sigma coefficient of 1, "time is very nearly free."
+>
+> The cost weights are fine. With an accurate discretisation the optimiser
+> drives the virtual control to machine precision without needing to buy flight
+> time, and sigma settles at 3.282 from any starting guess. The runaway I
+> measured was real, but it was a symptom of my quadrature, not of the paper's
+> formulation. I had a genuine measurement and attached it to the wrong cause.
+>
+> The guide's reported σ-collapse turns out to be the same thing seen from the
+> other side: from a guess of 10, sigma *does* dip to 0.00 on the first
+> iteration — and then recovers, 1.58, 2.37, 3.94, 2.27, 3.24, settling at
+> 3.282. A cruder discretisation never gets to see the recovery.
+>
+> ### What survives unchanged
+>
+> The `alpha_m` finding stands, and is now more strongly supported. Applying
+> the guide's own proposed fix — the exact quadrature — at the guide's own
+> `alpha_m = 1.0` makes the residual slightly *worse*, 4.94 to 5.41. No
+> quadrature scheme repairs a constraint that is simply binding. The two causes
+> are separable and both are now measured:
+>
+> | | `alpha_m = 1.0` | `alpha_m = 0.03` |
+> |---|---|---|
+> | single-endpoint | 4.94 | 4.19 |
+> | paper's Eq. 22 | 5.41 | **2.06e-16** |
+>
+> Only the corner with both fixed converges. Fixing either alone does nothing.
+>
+> The external cross-checks are untouched: the paper's direction cosine matrix
+> still matches this project's to 8.88e-16 and its gyroscopic term to
+> 0.00e+00. That was always the load-bearing result and it did not depend on
+> any of this.
+>
+> ### The lesson worth keeping
+>
+> I spent Days 16 to 18 correctly insisting that a guide's claimed root cause be
+> measured rather than accepted. Then I produced a negative result about a
+> peer-reviewed paper from an implementation I had not finished, and reported it
+> as a property of the paper. The discipline has to point inward too, and the
+> tell was available at the time: I had *named* the missing piece in the same
+> write-up and shipped the conclusion anyway.
+>
+> `tests/test_benchmark_szmuk.py` now asserts the reproduction, and Test 6b
+> isolates the quadrature by changing exactly one thing.
+
+
 ### Tomorrow (Day 19)
 Optimality rather than feasibility: Pontryagin conditions, KKT residuals from
 the solver's own duals, and a second backend. Worth doing — but the cost-weight
